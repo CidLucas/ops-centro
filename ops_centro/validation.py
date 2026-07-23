@@ -12,8 +12,12 @@ Credenciais (ver docs/secrets.md): as de escrita (`OTEL_EXPORTER_OTLP_*`) **não
 para consulta — é preciso um token de leitura (`metrics:read`, `logs:read`, `traces:read`)
 e as URLs dos datasources do stack:
 
-    GRAFANA_READ_TOKEN, GRAFANA_PROM_URL/GRAFANA_PROM_USER,
-    GRAFANA_LOKI_URL/GRAFANA_LOKI_USER, GRAFANA_TEMPO_URL/GRAFANA_TEMPO_USER
+    GRAFANA_READ_TOKEN + GRAFANA_STACK_URL                    (token glsa_, via proxy)
+    GRAFANA_READ_TOKEN + GRAFANA_{PROM,LOKI,TEMPO}_{URL,USER}  (Access Policy, direto)
+
+Um token `glsa_` (service account) fala com a instância Grafana e alcança os
+datasources pelo proxy dela — basta a URL do stack. Um token de Access Policy fala
+direto com cada datasource, e aí são precisas as três URLs e os três user ids.
 
 Cada checagem imprime a query que rodou: o mesmo texto pode ser colado no Explore para
 conferência manual, e é isso que torna o resultado auditável.
@@ -64,7 +68,11 @@ class CheckResult:
 
 @dataclass
 class Endpoint:
-    """Datasource do Grafana Cloud: URL base + usuário de basic auth."""
+    """Datasource do Grafana Cloud: URL base + usuário de basic auth.
+
+    Caminho direto (token de Access Policy com `*:read`): cada datasource tem URL e
+    user id próprios e a auth é basic `user:token`.
+    """
 
     url: str
     user: str
@@ -84,16 +92,88 @@ class Endpoint:
 
 
 @dataclass
+class ProxyEndpoint:
+    """Datasource alcançado pelo proxy da instância Grafana (token `glsa_`).
+
+    Um service account token não fala com os datasources direto — fala com a
+    instância (`https://<slug>.grafana.net`), que repassa a query pelo proxy em
+    `/api/datasources/proxy/uid/<uid>`. O uid é descoberto uma vez em
+    `/api/datasources`, filtrando pelo tipo (prometheus | loki | tempo).
+    """
+
+    base_url: str
+    token: str
+    ds_type: str
+    _uid: str | None = None
+    _erro: str = ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url and self.token)
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"}
+
+    def uid(self) -> str | None:
+        """uid do primeiro datasource do tipo esperado (cacheado)."""
+        if self._uid or self._erro:
+            return self._uid
+        try:
+            response = httpx.get(
+                f"{self.base_url.rstrip('/')}/api/datasources",
+                headers=self._headers(),
+                timeout=TIMEOUT,
+            )
+        except httpx.HTTPError as exc:
+            self._erro = f"erro de rede ao listar datasources: {exc}"
+            return None
+        if response.status_code != 200:
+            self._erro = f"HTTP {response.status_code} em /api/datasources: {response.text[:150]}"
+            return None
+        for datasource in response.json():
+            if datasource.get("type") == self.ds_type:
+                self._uid = datasource["uid"]
+                return self._uid
+        self._erro = f"nenhum datasource do tipo {self.ds_type} na instância"
+        return None
+
+    def get(self, path: str, params: dict[str, Any]) -> httpx.Response:
+        uid = self.uid()
+        if uid is None:
+            request = httpx.Request("GET", f"{self.base_url}{path}")
+            return httpx.Response(502, text=self._erro, request=request)
+        return httpx.get(
+            f"{self.base_url.rstrip('/')}/api/datasources/proxy/uid/{uid}{path}",
+            params=params,
+            headers=self._headers(),
+            timeout=TIMEOUT,
+        )
+
+
+@dataclass
 class GrafanaCloud:
     """Os três datasources de consulta do stack."""
 
-    prom: Endpoint
-    loki: Endpoint
-    tempo: Endpoint
+    prom: Endpoint | ProxyEndpoint
+    loki: Endpoint | ProxyEndpoint
+    tempo: Endpoint | ProxyEndpoint
 
     @classmethod
     def from_env(cls) -> "GrafanaCloud":
+        """Escolhe o modo de acesso pelo tipo do token.
+
+        `glsa_...` (service account) → proxy da instância, que só precisa de
+        `GRAFANA_STACK_URL`. Qualquer outro → caminho direto por datasource, com as
+        URLs e user ids de cada um.
+        """
         token = os.environ.get("GRAFANA_READ_TOKEN", "")
+        stack_url = os.environ.get("GRAFANA_STACK_URL", "")
+        if token.startswith("glsa_"):
+            return cls(
+                prom=ProxyEndpoint(stack_url, token, "prometheus"),
+                loki=ProxyEndpoint(stack_url, token, "loki"),
+                tempo=ProxyEndpoint(stack_url, token, "tempo"),
+            )
         return cls(
             prom=Endpoint(os.environ.get("GRAFANA_PROM_URL", ""), os.environ.get("GRAFANA_PROM_USER", ""), token),
             loki=Endpoint(os.environ.get("GRAFANA_LOKI_URL", ""), os.environ.get("GRAFANA_LOKI_USER", ""), token),
@@ -106,7 +186,7 @@ def _skip(signal: str, name: str, query: str, motivo: str) -> CheckResult:
 
 
 def _request(
-    endpoint: Endpoint,
+    endpoint: Endpoint | ProxyEndpoint,
     signal: str,
     name: str,
     path: str,

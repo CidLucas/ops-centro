@@ -24,7 +24,8 @@ Access Policy separada com `metrics:read`, `logs:read`, `traces:read`.
 
 | Variável | Formato | Quem usa | Onde está |
 | --- | --- | --- | --- |
-| `GRAFANA_READ_TOKEN` | `glc_...` (policy de leitura) | `ops_centro.validation` (`make validate`) | `.env` local |
+| `GRAFANA_READ_TOKEN` | `glsa_...` (service account) ou `glc_...` (policy de leitura) | `ops_centro.validation` (`make validate`) | `.env` local |
+| `GRAFANA_STACK_URL` | `https://<slug>.grafana.net` (só no modo `glsa_`) | idem | idem |
 | `GRAFANA_PROM_URL` / `GRAFANA_PROM_USER` | URL + id do datasource Prometheus | idem | idem |
 | `GRAFANA_LOKI_URL` / `GRAFANA_LOKI_USER` | URL + id do datasource Loki | idem | idem |
 | `GRAFANA_TEMPO_URL` / `GRAFANA_TEMPO_USER` | URL + id do datasource Tempo | idem | idem |

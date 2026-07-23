@@ -152,6 +152,59 @@ def test_cruzamento_por_tenant_lista_os_servicos():
     assert "tenant_id" in resultado.query
 
 
+# --- modo proxy (token glsa_) -----------------------------------------------------
+def test_token_glsa_usa_o_proxy_da_instancia(monkeypatch):
+    monkeypatch.setenv("GRAFANA_READ_TOKEN", "glsa_abc")
+    monkeypatch.setenv("GRAFANA_STACK_URL", "https://exemplo.grafana.net")
+    cloud = v.GrafanaCloud.from_env()
+    assert isinstance(cloud.prom, v.ProxyEndpoint)
+    assert (cloud.tempo.ds_type, cloud.loki.ds_type) == ("tempo", "loki")
+    assert cloud.prom.configured  # só a URL do stack basta
+
+
+def test_token_de_access_policy_usa_o_caminho_direto(monkeypatch):
+    monkeypatch.setenv("GRAFANA_READ_TOKEN", "glc_abc")
+    monkeypatch.setenv("GRAFANA_PROM_URL", "https://prom.grafana.net/api/prom")
+    monkeypatch.setenv("GRAFANA_PROM_USER", "4242")
+    cloud = v.GrafanaCloud.from_env()
+    assert isinstance(cloud.prom, v.Endpoint)
+    assert cloud.prom.user == "4242"
+
+
+def test_proxy_descobre_o_uid_pelo_tipo_e_reusa(monkeypatch):
+    chamadas = []
+
+    def fake_get(url, **kwargs):
+        chamadas.append(url)
+        request = httpx.Request("GET", url)
+        if url.endswith("/api/datasources"):
+            return httpx.Response(200, request=request, json=[
+                {"uid": "loki-uid", "type": "loki"},
+                {"uid": "prom-uid", "type": "prometheus"},
+            ])
+        return httpx.Response(200, request=request, json={"data": {"result": []}})
+
+    monkeypatch.setattr(v.httpx, "get", fake_get)
+    endpoint = v.ProxyEndpoint("https://exemplo.grafana.net", "glsa_abc", "prometheus")
+    endpoint.get("/api/v1/query", {"query": "up"})
+    endpoint.get("/api/v1/query", {"query": "up"})
+
+    assert chamadas[1].startswith("https://exemplo.grafana.net/api/datasources/proxy/uid/prom-uid")
+    assert chamadas.count("https://exemplo.grafana.net/api/datasources") == 1  # uid cacheado
+
+
+def test_proxy_reporta_instancia_indisponivel_como_falha(monkeypatch):
+    def fake_get(url, **kwargs):
+        request = httpx.Request("GET", url)
+        return httpx.Response(503, request=request, text='{"code":"Loading"}')
+
+    monkeypatch.setattr(v.httpx, "get", fake_get)
+    endpoint = v.ProxyEndpoint("https://exemplo.grafana.net", "glsa_abc", "tempo")
+    resultado = v.check_traces(cloud_com(tempo=endpoint), "agents-platform")[0]
+    assert resultado.ok is False
+    assert "HTTP 503" in resultado.detail and "/api/datasources" in resultado.detail
+
+
 # --- agregação -------------------------------------------------------------------
 def test_summary_separa_pass_falha_e_skip():
     resultados = [

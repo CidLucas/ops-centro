@@ -16,11 +16,23 @@
 
 ## 1. Credenciais de leitura (passo manual, uma vez)
 
-O token OTLP atual é **write-only** (`metrics:write`, `logs:write`, `traces:write`): consultar
-com ele devolve vazio/403. Em *Grafana Cloud → Access Policies*, crie uma policy com
-`metrics:read`, `logs:read`, `traces:read` e um token; pegue as URLs e os user IDs de cada
-datasource em *Stack → Details* (Prometheus, Loki e Tempo têm IDs **diferentes** do
-`1733152` do gateway OTLP).
+O token OTLP atual é **write-only** (`metrics:write`, `logs:write`, `traces:write`):
+consultar com ele devolve vazio/403. Há dois caminhos de leitura, e o validador escolhe
+sozinho pelo prefixo do token.
+
+**a) Service account da instância (`glsa_...`) — mais simples.** Em *Grafana → Administration
+→ Users and access → Service accounts*, crie uma conta com role `Viewer` e um token. As
+queries vão pelo proxy da instância, então basta a URL do stack:
+
+```bash
+GRAFANA_READ_TOKEN=glsa_...
+GRAFANA_STACK_URL=https://<slug>.grafana.net
+```
+
+**b) Access Policy (`glc_...`) — acesso direto aos datasources.** Em *Grafana Cloud →
+Access Policies*, crie uma policy com `metrics:read`, `logs:read`, `traces:read`; pegue URLs
+e user IDs em *Stack → Details* (Prometheus, Loki e Tempo têm IDs **diferentes** do
+`1733152` do gateway OTLP):
 
 ```bash
 GRAFANA_READ_TOKEN=glc_...
@@ -31,6 +43,10 @@ GRAFANA_LOKI_USER=<id do Loki>
 GRAFANA_TEMPO_URL=https://tempo-prod-<n>-prod-sa-east-1.grafana.net
 GRAFANA_TEMPO_USER=<id do Tempo>
 ```
+
+> **Instância adormecida:** no free tier, um stack sem acesso recente responde
+> `503 {"code":"Loading"}` em **toda** a API, inclusive com token válido. Não dá para
+> acordar por API — abra `https://<slug>.grafana.net` no navegador e clique no aviso.
 
 ## 2. Disparar tráfego no dev
 
