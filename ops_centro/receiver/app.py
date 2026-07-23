@@ -55,13 +55,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ops-centro receiver", version=__version__, lifespan=lifespan)
 
+# Atributos comuns (RF02) — precisam ir para o Resource do OTel, senão o sinal chega
+# no Grafana só com service.name e some das queries cruzadas por app_name/environment.
+RESOURCE_ATTRIBUTES = build_resource_attributes(APP_OPS_CENTRO, version=__version__)
+
 # OTLP para o próprio receiver (o observador também é observado). Sem
 # OTEL_EXPORTER_OTLP_ENDPOINT configurado, vira no-op silencioso — determinístico
 # em teste/CI. Langfuse não se aplica a este serviço.
-setup_observability(app, APP_OPS_CENTRO, langfuse=False)
-
-# Atributos comuns (RF02) anexados ao contexto de log deste app.
-RESOURCE_ATTRIBUTES = build_resource_attributes(APP_OPS_CENTRO, version=__version__)
+setup_observability(
+    app, APP_OPS_CENTRO, langfuse=False, resource_attributes=RESOURCE_ATTRIBUTES
+)
 
 
 def _expected_token() -> str | None:

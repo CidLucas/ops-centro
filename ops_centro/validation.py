@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
@@ -48,6 +49,15 @@ from ops_centro.conventions import (
 DEFAULT_APPS = (APP_AGENTS_PLATFORM, APP_FILE_MEMORY, APP_OPS_CENTRO)
 DEFAULT_WINDOW = "1h"
 TIMEOUT = httpx.Timeout(30.0)
+
+# uids canônicos dos datasources de aplicação num stack do Grafana Cloud. Existem outros
+# do mesmo tipo (usage insights, histórico de alertas) que responderiam a query nenhuma
+# do nosso schema — escolher pelo tipo, só, cai no datasource errado.
+DEFAULT_UIDS = {
+    "prometheus": "grafanacloud-prom",
+    "loki": "grafanacloud-logs",
+    "tempo": "grafanacloud-traces",
+}
 
 
 @dataclass
@@ -98,12 +108,18 @@ class ProxyEndpoint:
     Um service account token não fala com os datasources direto — fala com a
     instância (`https://<slug>.grafana.net`), que repassa a query pelo proxy em
     `/api/datasources/proxy/uid/<uid>`. O uid é descoberto uma vez em
-    `/api/datasources`, filtrando pelo tipo (prometheus | loki | tempo).
+    `/api/datasources` e cacheado.
+
+    **Filtrar só por tipo não basta:** um stack do Grafana Cloud traz vários
+    datasources do mesmo tipo (três Loki — logs da aplicação, histórico de estado de
+    alerta e usage insights). Por isso o uid canônico do Cloud tem precedência, com o
+    primeiro do tipo como último recurso, e `GRAFANA_<SINAL>_UID` para sobrescrever.
     """
 
     base_url: str
     token: str
     ds_type: str
+    preferred_uid: str = ""
     _uid: str | None = None
     _erro: str = ""
 
@@ -115,7 +131,7 @@ class ProxyEndpoint:
         return {"Authorization": f"Bearer {self.token}"}
 
     def uid(self) -> str | None:
-        """uid do primeiro datasource do tipo esperado (cacheado)."""
+        """uid do datasource a consultar (descoberto uma vez, depois cacheado)."""
         if self._uid or self._erro:
             return self._uid
         try:
@@ -130,12 +146,16 @@ class ProxyEndpoint:
         if response.status_code != 200:
             self._erro = f"HTTP {response.status_code} em /api/datasources: {response.text[:150]}"
             return None
-        for datasource in response.json():
-            if datasource.get("type") == self.ds_type:
-                self._uid = datasource["uid"]
-                return self._uid
-        self._erro = f"nenhum datasource do tipo {self.ds_type} na instância"
-        return None
+
+        do_tipo = [ds for ds in response.json() if ds.get("type") == self.ds_type]
+        if not do_tipo:
+            self._erro = f"nenhum datasource do tipo {self.ds_type} na instância"
+            return None
+        escolhido = next(
+            (ds for ds in do_tipo if ds.get("uid") == self.preferred_uid), do_tipo[0]
+        )
+        self._uid = escolhido["uid"]
+        return self._uid
 
     def get(self, path: str, params: dict[str, Any]) -> httpx.Response:
         uid = self.uid()
@@ -170,15 +190,43 @@ class GrafanaCloud:
         stack_url = os.environ.get("GRAFANA_STACK_URL", "")
         if token.startswith("glsa_"):
             return cls(
-                prom=ProxyEndpoint(stack_url, token, "prometheus"),
-                loki=ProxyEndpoint(stack_url, token, "loki"),
-                tempo=ProxyEndpoint(stack_url, token, "tempo"),
+                prom=ProxyEndpoint(
+                    stack_url, token, "prometheus",
+                    os.environ.get("GRAFANA_PROM_UID") or DEFAULT_UIDS["prometheus"],
+                ),
+                loki=ProxyEndpoint(
+                    stack_url, token, "loki",
+                    os.environ.get("GRAFANA_LOKI_UID") or DEFAULT_UIDS["loki"],
+                ),
+                tempo=ProxyEndpoint(
+                    stack_url, token, "tempo",
+                    os.environ.get("GRAFANA_TEMPO_UID") or DEFAULT_UIDS["tempo"],
+                ),
             )
         return cls(
             prom=Endpoint(os.environ.get("GRAFANA_PROM_URL", ""), os.environ.get("GRAFANA_PROM_USER", ""), token),
             loki=Endpoint(os.environ.get("GRAFANA_LOKI_URL", ""), os.environ.get("GRAFANA_LOKI_USER", ""), token),
             tempo=Endpoint(os.environ.get("GRAFANA_TEMPO_URL", ""), os.environ.get("GRAFANA_TEMPO_USER", ""), token),
         )
+
+
+def window_seconds(window: str) -> int:
+    """Converte a janela ('30m', '1h', '2d') em segundos. Valor inválido cai em 1h."""
+    unidades = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        return int(window[:-1]) * unidades[window[-1]]
+    except (ValueError, KeyError, IndexError):
+        return 3600
+
+
+def tempo_range(window: str) -> dict[str, int]:
+    """Intervalo explícito para o /api/search do Tempo.
+
+    Sem `start`/`end` o Tempo varre só os blocos mais recentes e um trace recém
+    ingerido pode não aparecer — foi o que escondeu o primeiro trace de validação.
+    """
+    agora = int(time.time())
+    return {"start": agora - window_seconds(window), "end": agora}
 
 
 def _skip(signal: str, name: str, query: str, motivo: str) -> CheckResult:
@@ -267,8 +315,15 @@ def _scalar(body: dict) -> float | None:
 
 # --- logs (Loki) ---------------------------------------------------------------
 def check_logs(cloud: GrafanaCloud, app: str, window: str = DEFAULT_WINDOW) -> list[CheckResult]:
-    """Logs do app chegam no Loki com a label `app_name`."""
-    query = f'sum(count_over_time({{{ATTR_APP_NAME}="{app}"}}[{window}]))'
+    """Logs do app chegam no Loki e o `app_name` do RF02 é consultável.
+
+    A ingestão OTLP do Grafana Cloud promove **só** `service_name` a label; o resto do
+    Resource vira structured metadata. Por isso o seletor de stream é genérico e o
+    `app_name` entra como filtro — filtrar por `{app_name=...}` não casaria nunca, e
+    `{service_name="<app>"}` também não serve: no file-memory-mcp o service.name é
+    `context-mcp-server`/`-worker`/`-admin`, diferente do app_name.
+    """
+    query = f'sum(count_over_time({{service_name=~".+"}} | {ATTR_APP_NAME}="{app}" [{window}]))'
 
     def _evaluate(body: dict) -> tuple[bool, str]:
         results = body.get("data", {}).get("result", [])
@@ -304,12 +359,12 @@ def check_traces(cloud: GrafanaCloud, app: str, window: str = DEFAULT_WINDOW) ->
 
     resultados = [
         _request(cloud.tempo, "traces", f"traces de {app}", "/api/search",
-                 {"q": base, "limit": 20}, _tem_traces, base)
+                 {"q": base, "limit": 20, **tempo_range(window)}, _tem_traces, base)
     ]
 
     def _rf02(body: dict) -> tuple[bool, str]:
         com_atributos = len(body.get("traces") or [])
-        total = _contagem_traces(cloud, base)
+        total = _contagem_traces(cloud, base, window)
         if total is None:
             return com_atributos > 0, f"{com_atributos} trace(s) com RF02 completo"
         if total == 0:
@@ -321,15 +376,15 @@ def check_traces(cloud: GrafanaCloud, app: str, window: str = DEFAULT_WINDOW) ->
 
     resultados.append(
         _request(cloud.tempo, "traces", f"RF02 em {app}", "/api/search",
-                 {"q": completo, "limit": 20}, _rf02, completo)
+                 {"q": completo, "limit": 20, **tempo_range(window)}, _rf02, completo)
     )
     return resultados
 
 
-def _contagem_traces(cloud: GrafanaCloud, query: str) -> int | None:
+def _contagem_traces(cloud: GrafanaCloud, query: str, window: str = DEFAULT_WINDOW) -> int | None:
     """Total de traces de uma busca (None se a consulta falhar)."""
     try:
-        response = cloud.tempo.get("/api/search", {"q": query, "limit": 20})
+        response = cloud.tempo.get("/api/search", {"q": query, "limit": 20, **tempo_range(window)})
         if response.status_code != 200:
             return None
         return len(response.json().get("traces") or [])
@@ -337,7 +392,9 @@ def _contagem_traces(cloud: GrafanaCloud, query: str) -> int | None:
         return None
 
 
-def check_cross_app(cloud: GrafanaCloud, apps: list[str]) -> list[CheckResult]:
+def check_cross_app(
+    cloud: GrafanaCloud, apps: list[str], window: str = DEFAULT_WINDOW
+) -> list[CheckResult]:
     """Query cruzada por `tenant_id` entre os apps — é o que valida o RNF05 na prática."""
     query = f'{{span.{ATTR_TENANT_ID}!=nil}}'
 
@@ -348,7 +405,7 @@ def check_cross_app(cloud: GrafanaCloud, apps: list[str]) -> list[CheckResult]:
 
     return [
         _request(cloud.tempo, "traces", "cruzamento por tenant_id", "/api/search",
-                 {"q": query, "limit": 20}, _evaluate, query)
+                 {"q": query, "limit": 20, **tempo_range(window)}, _evaluate, query)
     ]
 
 
@@ -362,7 +419,7 @@ def run_checklist(
         resultados += check_metrics(cloud, app, window)
         resultados += check_logs(cloud, app, window)
         resultados += check_traces(cloud, app, window)
-    resultados += check_cross_app(cloud, apps)
+    resultados += check_cross_app(cloud, apps, window)
     return resultados
 
 

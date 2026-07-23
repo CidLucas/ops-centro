@@ -8,11 +8,11 @@
 
 | Item | Estado |
 | --- | --- |
-| Stack Grafana Cloud + secrets OTLP (#2) | ✅ `stack-1733152-otel-dev`, `prod-sa-east-1` |
+| Stack Grafana Cloud + secrets OTLP (#2) | ✅ `radiantfennec1578`, `prod-sa-east-1` |
 | Atributos comuns + sampling na lib (#4) | ✅ `blu_observability_bootstrap` 0.3.0 |
 | agents-platform instrumentado (#5) | ⏳ pré-requisito deste roteiro |
 | file-memory-mcp instrumentado (#7) | ✅ spans `file_ingestion` / `mcp_memory_query` |
-| **Token de LEITURA do Grafana Cloud** | ⏳ ver §1 |
+| Token de LEITURA do Grafana Cloud | ✅ service account (`glsa_`), ver §1 |
 
 ## 1. Credenciais de leitura (passo manual, uma vez)
 
@@ -92,8 +92,27 @@ Depois de ~48h de emissão contínua, registre o consumo em
 [free-tier-baseline.md](free-tier-baseline.md) e ajuste o sampling (RNF02) se a projeção
 mensal passar de ~70% de qualquer teto.
 
-## 5. Registro da execução
+## 5. O que a primeira execução revelou
 
-| Data | Executado por | Resultado | Observações |
-| --- | --- | --- | --- |
-| _(preencher)_ | | | |
+Três coisas que só apareceram rodando o gate contra o stack real — todas já corrigidas
+no validador ou no código:
+
+1. **RF02 não chegava no Resource.** O receiver montava `RESOURCE_ATTRIBUTES` e não
+   passava para `setup_observability(resource_attributes=...)`: o trace subia só com
+   `service.name` e sumia de qualquer query cruzada por `app_name`. Corrigido em
+   `ops_centro/receiver/app.py`; conferido no trace `f257770f…`, que agora traz
+   `app_name`, `environment` e `version`.
+2. **Loki não tem label `app_name`.** A ingestão OTLP do Grafana Cloud promove só
+   `service_name` a label; o resto do Resource vira *structured metadata*. Por isso a
+   query é `{service_name=~".+"} | app_name="<app>"` — e não `{app_name="<app>"}`, que
+   não casaria nunca. Vale notar que `service_name` também não serve de seletor: no
+   file-memory-mcp ele é `context-mcp-server`/`-worker`/`-admin`.
+3. **Busca no Tempo precisa de intervalo explícito.** Sem `start`/`end`, o `/api/search`
+   varre só os blocos mais recentes e um trace recém-ingerido não aparece — foi o que
+   escondeu o primeiro trace de validação, que existia e era acessível por id.
+
+## 6. Registro da execução
+
+| Data | Resultado | Observações |
+| --- | --- | --- |
+| 2026-07-23 | ops-centro: traces ✅ (1/1 com RF02), logs ✅, métricas ❌ | Métricas falham por lacuna real de emissão: nenhuma série chegou ao Mimir (nem `target_info`) — o receiver ainda não emite `ops_centro_*` (issue #11). agents-platform e file-memory-mcp: sem sinal algum, dependem do #5 e de uma execução em dev. |

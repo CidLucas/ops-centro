@@ -95,6 +95,10 @@ def test_logs_somam_as_linhas_da_janela():
     (resultado,) = v.check_logs(cloud_com(loki=endpoint_falso(handler)), "agents-platform")
     assert resultado.ok is True
     assert "12 linha(s)" in resultado.detail
+    # OTLP no Grafana Cloud só promove service_name a label; app_name é structured
+    # metadata e por isso entra como filtro, não como seletor de stream.
+    assert 'service_name=~".+"' in resultado.query
+    assert '| app_name="agents-platform"' in resultado.query
 
 
 def test_erro_http_vira_falha_com_a_mensagem_do_backend():
@@ -169,6 +173,34 @@ def test_token_de_access_policy_usa_o_caminho_direto(monkeypatch):
     cloud = v.GrafanaCloud.from_env()
     assert isinstance(cloud.prom, v.Endpoint)
     assert cloud.prom.user == "4242"
+
+
+def test_proxy_prefere_o_uid_canonico_entre_varios_do_mesmo_tipo(monkeypatch):
+    """Um stack do Cloud tem três Loki; pegar o primeiro do tipo cai no errado."""
+
+    def fake_get(url, **kwargs):
+        request = httpx.Request("GET", url)
+        if url.endswith("/api/datasources"):
+            return httpx.Response(200, request=request, json=[
+                {"uid": "grafanacloud-alert-state-history", "type": "loki"},
+                {"uid": "grafanacloud-logs", "type": "loki"},
+                {"uid": "grafanacloud-usage-insights", "type": "loki"},
+            ])
+        return httpx.Response(200, request=request, json={"data": {"result": []}})
+
+    monkeypatch.setattr(v.httpx, "get", fake_get)
+    endpoint = v.ProxyEndpoint("https://x.grafana.net", "glsa_abc", "loki", "grafanacloud-logs")
+    assert endpoint.uid() == "grafanacloud-logs"
+
+
+def test_proxy_cai_no_primeiro_do_tipo_sem_uid_canonico(monkeypatch):
+    def fake_get(url, **kwargs):
+        request = httpx.Request("GET", url)
+        return httpx.Response(200, request=request, json=[{"uid": "outro-loki", "type": "loki"}])
+
+    monkeypatch.setattr(v.httpx, "get", fake_get)
+    endpoint = v.ProxyEndpoint("https://x.grafana.net", "glsa_abc", "loki", "grafanacloud-logs")
+    assert endpoint.uid() == "outro-loki"
 
 
 def test_proxy_descobre_o_uid_pelo_tipo_e_reusa(monkeypatch):
