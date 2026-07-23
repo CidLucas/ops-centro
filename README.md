@@ -48,5 +48,5 @@ make up        # stack via docker compose
 Mesmo modelo do mcp_brain:
 
 - **[ci.yml](.github/workflows/ci.yml)** — lint (ruff), varredura de segredos (gitleaks), audit de deps (pip-audit, não-bloqueante) e testes unit com piso de cobertura. Roda em todo push e PR para `main`.
-- **[cd.yml](.github/workflows/cd.yml)** — build local da imagem Docker, smoke (entrypoints importam, roda non-root), scan Trivy (não-bloqueante) e validação do compose. Roda em push na `main` e tags `v*`.
+- **[cd.yml](.github/workflows/cd.yml)** — build local da imagem Docker, smoke (entrypoints importam, roda non-root) e validação do compose. Roda em push na `main` e tags `v*`.
 - **Proteção da `main`** — ruleset versionado em [.github/rulesets/protect-main.json](.github/rulesets/protect-main.json); status em [.github/BRANCH-PROTECTION.md](.github/BRANCH-PROTECTION.md).

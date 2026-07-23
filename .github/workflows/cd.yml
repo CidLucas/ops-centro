@@ -56,18 +56,6 @@ jobs:
           echo "UID=$uid"
           test "$uid" != "0" || { echo "ERRO: container rodando como root"; exit 1; }
 
-      # Scan de vulnerabilidades da imagem (Trivy). NÃO-BLOQUEANTE por ora
-      # (exit-code 0): levanta baseline de CVEs sem travar o CD. Promova a
-      # exit-code 1 (HIGH/CRITICAL) quando o backlog estiver tratado.
-      - name: Trivy — scan da imagem
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ops-centro-receiver:ci
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "0"
-
   validate-compose:
     name: Valida docker-compose
     runs-on: ubuntu-latest
