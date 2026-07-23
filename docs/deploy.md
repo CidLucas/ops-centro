@@ -87,6 +87,29 @@ Todos em **us-east-1** (`--region us-east-1` ou `AWS_REGION` exportado) — é a
 EC2 do Hermes, e o `env-from-ssm.sh` lê dela. `GRAFANA_STACK_URL` não é decoração: é dele
 que sai o link do trace e do dashboard na mensagem enriquecida (#14).
 
+**A role da EC2 precisa de permissão de leitura** — sem ela o `env-from-ssm.sh` falha com
+`AccessDeniedException: ssm:GetParametersByPath`. Policy inline mínima na `Hermes-EC2-Role`
+(escopada ao path do serviço + decriptação via SSM), aplicada com credencial de admin, não
+com a role da EC2:
+
+```bash
+cat > ops-centro-ssm.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "OpsCentroSsmRead", "Effect": "Allow",
+      "Action": ["ssm:GetParametersByPath", "ssm:GetParameters", "ssm:GetParameter"],
+      "Resource": "arn:aws:ssm:us-east-1:655177116015:parameter/ops-centro/prod/*" },
+    { "Sid": "OpsCentroKmsDecrypt", "Effect": "Allow", "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "kms:ViaService": "ssm.us-east-1.amazonaws.com" } } }
+  ]
+}
+JSON
+aws iam put-role-policy --role-name Hermes-EC2-Role \
+  --policy-name ops-centro-ssm-read --policy-document file://ops-centro-ssm.json
+```
+
 Na EC2 (repo privado → o clone usa o mesmo PAT do §2):
 
 ```bash
