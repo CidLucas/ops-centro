@@ -26,8 +26,10 @@ dev = [
 
 # blu_observability_bootstrap vive no monorepo repo_platform (subdirectory).
 # Pinado por commit para build reproduzível — bump deliberado, nunca implícito.
+# rev atual = head do PR repo_platform#242 (lib 0.3.0: resource_attributes +
+# sampling); re-pinar para o commit de merge quando o PR entrar em main.
 [tool.uv.sources]
-blu-observability-bootstrap = { git = "https://github.com/CidLucas/repo_platform.git", subdirectory = "libs/blu_observability_bootstrap", rev = "061e400bb6e0af70b7aaa1c6a0daace0981ff6a2" }
+blu-observability-bootstrap = { git = "https://github.com/CidLucas/repo_platform.git", subdirectory = "libs/blu_observability_bootstrap", rev = "5bd5076e557458aa12fa54e257de463cd407f736" }
 
 [build-system]
 requires = ["hatchling"]
