@@ -40,6 +40,53 @@ SPAN_MCP_TOOL_CALL = "mcp_tool_call"
 SPAN_FILE_INGESTION = "file_ingestion"
 SPAN_MCP_MEMORY_QUERY = "mcp_memory_query"
 
+# --- Atributos de span (seção 6 do plano; ver docs/schema.md) ------------------
+# agent_execution
+ATTR_AGENT_NAME = "agent_name"
+ATTR_MODEL = "model"
+ATTR_TOKENS_INPUT = "tokens_input"
+ATTR_TOKENS_OUTPUT = "tokens_output"
+ATTR_COST_USD = "cost_usd"
+ATTR_SESSION_ID = "session_id"
+# mcp_tool_call
+ATTR_TOOL_NAME = "tool_name"
+ATTR_MCP_SERVER = "mcp_server"
+ATTR_RETRIES = "retries"
+# file_ingestion
+ATTR_FILE_ID = "file_id"
+ATTR_FILE_TYPE = "file_type"
+ATTR_FILE_SIZE_BYTES = "file_size_bytes"
+ATTR_INGESTION_STAGE = "stage"
+# mcp_memory_query
+ATTR_MCP_SERVER_ID = "mcp_server_id"
+ATTR_QUERY_TYPE = "query_type"
+ATTR_RESULT_COUNT = "result_count"
+
+# --- Métricas: prefixos por app (docs/schema.md) -------------------------------
+# Prefixo snake_case por app; counters terminam em `_total`, histogramas de
+# latência em `_duration_seconds` (unit "s"), tamanhos em `_bytes`.
+# `context_mcp` já está em produção no mcp_brain — congelado como está.
+METRIC_PREFIXES = {
+    APP_AGENTS_PLATFORM: "agents_platform",
+    APP_FILE_MEMORY: "context_mcp",
+    APP_OPS_CENTRO: "ops_centro",
+}
+
+# Labels permitidas em métricas (cardinalidade baixa e enumerável). tenant_id é
+# permitido apenas em métricas de volume/uso; session_id/trace_id/file_id nunca.
+ALLOWED_METRIC_LABELS = frozenset(
+    {
+        ATTR_APP_NAME,
+        ATTR_ENVIRONMENT,
+        ATTR_TENANT_ID,
+        "tool",
+        "stage",
+        "status",
+        "agent",
+        "model",
+    }
+)
+
 
 def build_resource_attributes(
     app_name: str,
