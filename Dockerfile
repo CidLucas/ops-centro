@@ -17,6 +17,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY ops_centro/ ops_centro/
 COPY db/ db/
+# README.md entra porque o pyproject o declara em `readme`: sem ele o hatchling
+# falha ao montar a metadata do wheel (OSError: Readme file does not exist).
+COPY README.md ./
 RUN uv sync --frozen --no-dev
 
 # --- runtime -------------------------------------------------------------------
