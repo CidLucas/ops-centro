@@ -39,12 +39,34 @@ sudo systemctl is-enabled docker             # precisa estar enabled: é o que g
 aws sts get-caller-identity                  # IAM role com ssm:GetParametersByPath + kms:Decrypt
 ```
 
+Se `docker compose version` reclamar de `'compose' is not a docker command`, o plugin v2
+não está instalado. Instalação independente de distro:
+
+```bash
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+```
+
+**Repositório e pacote são privados.** O `git clone` e o `docker pull` na EC2 exigem um PAT
+do GitHub com `repo` + `read:packages` (um só serve para os dois). Ver §3.
+
 Security group: **443/tcp e 80/tcp abertos para 0.0.0.0/0**. O 80 não é opcional se o
 Caddy for emitir certificado (desafio HTTP-01 do Let's Encrypt). A 8080 fica fechada — o
 container publica só em `127.0.0.1`.
 
-DNS: um registro A do domínio do receiver (ex.: `ops.seudominio.com`) para o IP elástico
-da instância, **antes** de subir o Caddy.
+DNS: um registro A do domínio do receiver para o **IP elástico** da instância, **antes** de
+subir o Caddy. Sem domínio próprio, o [DuckDNS](https://www.duckdns.org) resolve grátis e
+está na Public Suffix List (o Let's Encrypt emite sem esbarrar no rate limit do domínio
+compartilhado):
+
+```bash
+# cria/atualiza <nome>.duckdns.org apontando para o IP elástico da EC2. O token vem do
+# painel do duckdns.org (login social). Com IP elástico, basta rodar uma vez.
+curl "https://www.duckdns.org/update?domains=<nome>&token=<TOKEN>&ip=<IP_ELASTICO>"   # → OK
+dig +short <nome>.duckdns.org                                                          # confere
+```
 
 ## 3. Segredos: SSM Parameter Store, nunca arquivo commitado (RNF06)
 
@@ -57,19 +79,20 @@ aws ssm put-parameter --type SecureString --name /ops-centro/prod/OTEL_EXPORTER_
 aws ssm put-parameter --type String --name /ops-centro/prod/OTEL_EXPORTER_OTLP_ENDPOINT --value 'https://otlp-gateway-prod-sa-east-1.grafana.net/otlp'
 aws ssm put-parameter --type String --name /ops-centro/prod/GRAFANA_STACK_URL --value 'https://<slug>.grafana.net'
 aws ssm put-parameter --type String --name /ops-centro/prod/ENVIRONMENT --value 'prod'
-aws ssm put-parameter --type String --name /ops-centro/prod/RECEIVER_DOMAIN --value 'ops.seudominio.com'
+aws ssm put-parameter --type String --name /ops-centro/prod/RECEIVER_DOMAIN --value '<nome>.duckdns.org'
 aws ssm put-parameter --type String --name /ops-centro/prod/ACME_EMAIL --value 'voce@exemplo.com'
 ```
 
-`GRAFANA_STACK_URL` não é decoração: é dele que sai o link do trace e do dashboard na
-mensagem enriquecida (#14). Sem ele o alerta chega com logs, mas sem links.
+Todos em **us-east-1** (`--region us-east-1` ou `AWS_REGION` exportado) — é a região da
+EC2 do Hermes, e o `env-from-ssm.sh` lê dela. `GRAFANA_STACK_URL` não é decoração: é dele
+que sai o link do trace e do dashboard na mensagem enriquecida (#14).
 
-Na EC2:
+Na EC2 (repo privado → o clone usa o mesmo PAT do §2):
 
 ```bash
-git clone https://github.com/CidLucas/ops-centro.git /opt/ops-centro   # ou só o deploy/
+git clone https://<PAT>@github.com/CidLucas/ops-centro.git /opt/ops-centro
 cd /opt/ops-centro/deploy
-./env-from-ssm.sh          # escreve ./.env (modo 600) a partir de /ops-centro/prod
+./env-from-ssm.sh          # escreve ./.env (modo 600), região descoberta via IMDSv2
 ```
 
 Rotação de qualquer segredo = `put-parameter` + `./env-from-ssm.sh` + `./deploy.sh`. O
@@ -78,6 +101,9 @@ Rotação de qualquer segredo = `put-parameter` + `./env-from-ssm.sh` + `./deplo
 ## 4. Subir
 
 ```bash
+# pacote GHCR privado: login antes do pull (mesmo PAT do §2, com read:packages)
+echo '<PAT>' | docker login ghcr.io -u CidLucas --password-stdin
+
 cd /opt/ops-centro/deploy
 ./deploy.sh --proxy        # pull + up -d + espera o /healthz; --proxy sobe o Caddy junto
 ```
