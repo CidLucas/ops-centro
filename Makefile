@@ -64,6 +64,19 @@ metrics: ## Lista o catálogo de métricas da §7 (issue #11)
 metrics-check: ## Confere no Prometheus se as métricas da §7 estão chegando
 	uv run python -m ops_centro.metrics --check
 
+.PHONY: alerts alerts-check alerts-apply alerts-list
+alerts: ## (Re)gera os YAMLs de grafana/alerts/ (issue #12)
+	uv run python -m ops_centro.grafana.alerts --write
+
+alerts-check: ## Falha se os YAMLs divergirem do gerador (mesmo gate do teste)
+	uv run python -m ops_centro.grafana.alerts --check
+
+alerts-list: ## Lista as regras e seus limiares
+	uv run python -m ops_centro.grafana.alerts --list
+
+alerts-apply: ## Publica regras, contact point e roteamento no Grafana Cloud
+	uv run python -m ops_centro.grafana.alerts --apply
+
 # ---------------------------------------------------------- validação -------
 .PHONY: validate validate-json
 validate: ## Checklist de sinais no Grafana Cloud (issue #6)

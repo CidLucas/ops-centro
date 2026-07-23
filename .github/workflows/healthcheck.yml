@@ -1,0 +1,73 @@
+name: Healthcheck do receiver
+
+# Vigia o endpoint público do receiver na EC2 do Hermes (issue #13).
+#
+# O healthcheck do compose reinicia container morto, mas não vê o que está entre o Grafana
+# Cloud e o container: DNS expirado, certificado vencido, security group fechado, proxy
+# caído. Esta run bate no mesmo caminho que o Grafana usa — de fora, por HTTPS.
+#
+# Falhar aqui é o sinal de que o webhook de alerta não chegaria: o vigia do vigia.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: healthcheck
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: GET /healthz por HTTPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Variável de repositório (não secret): a URL pública não é segredo, e vê-la no log
+      # é o que torna a falha diagnosticável. Ausente = repo sem deploy ainda; sai verde.
+      - name: Confere se há endpoint configurado
+        id: guard
+        env:
+          URL: ${{ vars.RECEIVER_HEALTH_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "RECEIVER_HEALTH_URL não configurada — nada a vigiar nesta run."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bate no /healthz
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          URL: ${{ vars.RECEIVER_HEALTH_URL }}
+        run: |
+          # 3 tentativas antes de acusar: rede de runner tem soluço, e alerta de
+          # monitoramento que grita por um pacote perdido é alerta que se aprende a ignorar.
+          for tentativa in 1 2 3; do
+            corpo=$(curl -fsS --max-time 10 "$URL") && break
+            echo "tentativa $tentativa falhou"
+            sleep 10
+          done
+          test -n "${corpo:-}" || { echo "ERRO: $URL não respondeu"; exit 1; }
+          echo "$corpo"
+          echo "$corpo" | grep -q '"status": *"ok"' || {
+            echo "ERRO: /healthz respondeu, mas sem status ok"; exit 1;
+          }
+
+      # Certificado é a causa mais provável de o webhook parar de chegar sem ninguém
+      # perceber: o Grafana Cloud recusa TLS inválido e o alerta some em silêncio.
+      - name: Confere a validade do certificado
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          URL: ${{ vars.RECEIVER_HEALTH_URL }}
+        run: |
+          host=$(echo "$URL" | sed -E 's#https?://([^/:]+).*#\1#')
+          fim=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
+            | openssl x509 -noout -enddate | cut -d= -f2)
+          echo "certificado de $host válido até $fim"
+          restam=$(( ($(date -d "$fim" +%s) - $(date +%s)) / 86400 ))
+          echo "faltam $restam dia(s)"
+          test "$restam" -gt 7 || { echo "ERRO: certificado expira em menos de 7 dias"; exit 1; }

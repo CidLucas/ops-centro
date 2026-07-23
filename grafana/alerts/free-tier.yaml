@@ -1,0 +1,246 @@
+# Consumo do próprio free tier do Grafana Cloud — issue #12 (RNF02, risco §10).
+#
+# O risco número um do plano é a observabilidade estourar o orçamento que ela existe para
+# proteger (RNF01: R$ 0–50). Estas regras são o alarme de fumaça do próprio pipeline.
+#
+# Fonte: datasource `grafanacloud-usage` (uid `grafanacloud-usage`), não o Prometheus do
+# stack — nomes conferidos contra a instância em docs/free-tier-baseline.md.
+#
+# Os limiares são os da tabela de decisão do RNF02 (free-tier-baseline.md §"Regra de
+# decisão"): 70% da cota manda baixar o sampling; 7.000 séries ativas mandam caçar label de
+# alta cardinalidade. Alerta que dispara sem ação associada é ruído — cada um destes tem a
+# sua na descrição.
+
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: ops-centro-free-tier
+    folder: Ops Centro
+    interval: 5m
+    rules:
+      - uid: ops-centro-free-tier-logs-70
+        title: 'Free tier: ingestão de logs acima de 70% da cota'
+        condition: B
+        for: 1h
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Logs em {{ printf "%.0f" $values.A.Value }}% da cota do mês
+          description: |-
+            Ação (RNF02): cortar `INFO` do Loki e mandar para o Turso só o que precisa de retenção longa (docs/turso-logs.md → 'O que logar').
+            `for: 1h` porque a métrica de uso é acumulada no ciclo de billing: um pico instantâneo não existe aqui, e o que importa é a tendência.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/free-tier-baseline.md
+        labels:
+          severity: warning
+          component: free-tier
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_USAGE}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * grafanacloud_org_logs_usage / clamp_min(grafanacloud_org_logs_included_usage, 1)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 70
+      - uid: ops-centro-free-tier-logs-90
+        title: 'Free tier: ingestão de logs acima de 90% da cota'
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Logs em {{ printf "%.0f" $values.A.Value }}% da cota — estouro iminente
+          description: |-
+            Passar da cota tira o stack do free tier no meio do ciclo (RNF01).
+            Ação imediata: desligar o export de logs OTLP dos apps menos críticos; a retenção longa continua no Turso, que tem cota independente.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/free-tier-baseline.md
+        labels:
+          severity: critical
+          component: free-tier
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_USAGE}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * grafanacloud_org_logs_usage / clamp_min(grafanacloud_org_logs_included_usage, 1)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 90
+      - uid: ops-centro-free-tier-traces-70
+        title: 'Free tier: ingestão de traces acima de 70% da cota'
+        condition: B
+        for: 1h
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Traces em {{ printf "%.0f" $values.A.Value }}% da cota do mês
+          description: |-
+            Ação (RNF02): baixar `OTEL_TRACES_SAMPLER_ARG` — 0.25 em dev, 0.10 em prod. Erro continua 100% exportado em qualquer nível (schema.md §5), então o sampling não cega a investigação.
+            Trace é o sinal mais caro por byte do stack: é aqui que o corte compensa.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/free-tier-baseline.md
+        labels:
+          severity: warning
+          component: free-tier
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_USAGE}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * grafanacloud_org_traces_usage / clamp_min(grafanacloud_org_traces_included_usage, 1)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 70
+      - uid: ops-centro-free-tier-traces-90
+        title: 'Free tier: ingestão de traces acima de 90% da cota'
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Traces em {{ printf "%.0f" $values.A.Value }}% da cota — estouro iminente
+          description: Sampling agressivo agora (0.05 em prod) e revisão de quem está gerando span em volume — o dashboard de visão geral mostra o volume por app.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/free-tier-baseline.md
+        labels:
+          severity: critical
+          component: free-tier
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_USAGE}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * grafanacloud_org_traces_usage / clamp_min(grafanacloud_org_traces_included_usage, 1)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 90
+      - uid: ops-centro-free-tier-series-70
+        title: 'Free tier: séries ativas acima de 7.000'
+        condition: B
+        for: 30m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: '{{ $values.A.Value }} séries ativas (cota: 10000)'
+          description: |-
+            Séries ativas crescendo é quase sempre label de alta cardinalidade vazando para métrica: nenhuma pode ter `session_id`, `trace_id` ou `file_id` (schema.md §3; `ALLOWED_METRIC_LABELS` em conventions.py é a lista fechada).
+            Investigação: `count by (app_name) ({app_name!=""})` no Prometheus do stack diz qual app está gerando as séries.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/free-tier-baseline.md
+        labels:
+          severity: warning
+          component: free-tier
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_USAGE}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: max(grafanacloud_instance_active_series)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 7000
+      - uid: ops-centro-free-tier-series-95
+        title: 'Free tier: séries ativas acima de 9.500'
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: '{{ $values.A.Value }} séries ativas — a 5% da cota de 10000'
+          description: |-
+            Estourar a cota de séries não custa dinheiro: **descarta métrica**. O pipeline para de responder justamente quando mais precisa ser consultado.
+            Ação: identificar a métrica culpada e remover a label na origem — reduzir retenção não devolve série ativa.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/free-tier-baseline.md
+        labels:
+          severity: critical
+          component: free-tier
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_USAGE}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: max(grafanacloud_instance_active_series)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 9500

@@ -1,10 +1,11 @@
-name: CD (build local das imagens)
+name: CD (build + publicação da imagem)
 
-# Build de entrega (modelado no CD do mcp_brain): constrói a imagem Docker
-# localmente no runner (SEM push para registry), valida que ela sobe e está bem
-# cabeada, e checa o docker-compose. Gate de "a imagem de produção builda e importa".
+# Build de entrega (modelado no CD do mcp_brain): constrói a imagem Docker no runner,
+# valida que ela sobe e está bem cabeada, e **publica no GHCR** — é dela que a EC2 do
+# Hermes faz `docker compose pull` (issue #13, docs/deploy.md).
 #
-# Para publicar em registry depois, é só adicionar login + push:true no step de build.
+# Ordem deliberada: smoke primeiro, push depois. Imagem que não importa os entrypoints ou
+# que roda como root nunca chega ao registry, e portanto nunca chega à EC2.
 on:
   push:
     branches: [main]
@@ -17,10 +18,11 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write # push no GHCR com o GITHUB_TOKEN da própria run
 
 jobs:
   build-image:
-    name: Build + smoke da imagem
+    name: Build + smoke + push da imagem
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,17 +30,39 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build LOCAL: push=false, load=true carrega a imagem no daemon do runner
-      # para os steps seguintes. Cache de camadas via GitHub Actions cache.
-      - name: Build da imagem (local, sem push)
+      # O GHCR só aceita nome de imagem em minúsculas; `github.repository` preserva a
+      # capitalização do dono (CidLucas), então a conversão é obrigatória.
+      - name: Nome da imagem
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-receiver" >> "$GITHUB_OUTPUT"
+
+      # `latest` só na main; `sha-<commit>` sempre (é a tag que o deploy fixa quando
+      # precisa voltar atrás); `v1.2.3` e `1.2` nas tags de release.
+      - name: Tags da imagem
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # Build LOCAL: push=false, load=true carrega a imagem no daemon do runner para os
+      # steps de smoke. Cache de camadas via GitHub Actions cache.
+      - name: Build da imagem (local, para o smoke)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
+          # A EC2 do Hermes é x86_64. Se ela virar Graviton, some `linux/arm64` aqui
+          # (e o build passa a exigir emulação no runner).
           platforms: linux/amd64
           push: false
           load: true
-          tags: ops-centro-receiver:ci
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -46,19 +70,65 @@ jobs:
       # sozinho não pega (import não exige env — sem OTLP endpoint vira no-op).
       - name: Smoke — entrypoints importam
         run: |
-          docker run --rm ops-centro-receiver:ci python -c "\
+          docker run --rm ${{ steps.img.outputs.name }}:sha-${{ github.sha }} python -c "\
           import ops_centro.receiver.app, ops_centro.conventions, ops_centro.metrics, \
-          ops_centro.turso.retention, ops_centro.grafana.dashboards; \
+          ops_centro.turso.retention, ops_centro.grafana.dashboards, \
+          ops_centro.grafana.alerts, ops_centro.receiver.enrichment; \
           print('imagem OK: entrypoints importam')"
 
       - name: Smoke — imagem roda como non-root
         run: |
-          uid=$(docker run --rm ops-centro-receiver:ci id -u)
+          uid=$(docker run --rm ${{ steps.img.outputs.name }}:sha-${{ github.sha }} id -u)
           echo "UID=$uid"
           test "$uid" != "0" || { echo "ERRO: container rodando como root"; exit 1; }
 
+      # Smoke de verdade do serviço: sobe o container e cobra o /healthz que a EC2 vai
+      # cobrar depois (docs/deploy.md). Um import que passa não garante uvicorn de pé.
+      - name: Smoke — /healthz responde
+        run: |
+          docker run -d --name receiver-smoke -p 8080:8080 \
+            -e ALERT_WEBHOOK_TOKEN=smoke \
+            ${{ steps.img.outputs.name }}:sha-${{ github.sha }}
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/healthz; then echo; ok=1; break; fi
+            sleep 1
+          done
+          docker logs receiver-smoke
+          docker rm -f receiver-smoke
+          test "${ok:-0}" = "1" || { echo "ERRO: /healthz não respondeu em 20s"; exit 1; }
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A imagem já está no daemon (load acima) com todas as tags: publicar é só empurrar.
+      # Rebuildar aqui só para dar `push: true` custaria uma segunda passada de build.
+      - name: Push para o GHCR
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            echo "→ $tag"
+            docker push "$tag"
+          done
+
+      - name: Resumo da run
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Imagem publicada"
+            echo
+            for tag in $TAGS; do echo "- \`$tag\`"; done
+            echo
+            echo "Deploy na EC2: \`cd /opt/ops-centro/deploy && ./deploy.sh\` (docs/deploy.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   validate-compose:
-    name: Valida docker-compose
+    name: Valida os composes (local e de produção)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +136,21 @@ jobs:
       # docker compose config interpola ${VARS}; sem .env ele reclama do env_file.
       # Usa o .env.example como base só para a validação estática.
       - name: Prepara .env de validação
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          cp .env.example deploy/.env
 
-      - name: docker compose config
+      - name: docker compose config (local)
         run: docker compose config -q && echo "docker-compose.yml válido"
+
+      # RECEIVER_DOMAIN/ACME_EMAIL são obrigatórias no compose de produção (`${VAR:?}`):
+      # subir o Caddy sem domínio daria certificado que nunca emite. Aqui elas ganham
+      # valor de mentira só para a validação estática passar.
+      - name: docker compose config (produção)
+        env:
+          RECEIVER_DOMAIN: ops.exemplo.com
+          ACME_EMAIL: ci@exemplo.com
+        run: |
+          docker compose -f deploy/docker-compose.yml config -q
+          docker compose -f deploy/docker-compose.yml --profile proxy config -q
+          echo "deploy/docker-compose.yml válido (com e sem o proxy)"

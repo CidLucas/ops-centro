@@ -45,12 +45,37 @@ não tem. Use um service account com a role *Editor* (ou uma Access Policy com
 Sem ele, `make dashboards` e `make dashboards-check` continuam funcionando (são offline);
 só a publicação exige credencial.
 
+## Grafana Cloud — alertas as-code (issue #12)
+
+Mesmo `GRAFANA_API_TOKEN` dos dashboards, com dois escopos a mais: `alert.rules:write` e
+`alert.notifications:write` (a role *Editor* já cobre os quatro). Ver [alertas.md](alertas.md).
+
+| Variável | Formato | Quem usa | Onde está |
+| --- | --- | --- | --- |
+| `RECEIVER_WEBHOOK_URL` | `https://<domínio>/alerts/grafana` | `ops_centro.grafana.alerts` (`make alerts-apply`) | `.env` local (não é segredo, mas muda por ambiente) |
+| `GRAFANA_PROM_DS_UID` / `GRAFANA_USAGE_DS_UID` | uid do datasource | idem | `.env` local (defaults `grafanacloud-prom` / `grafanacloud-usage`) |
+
+Os YAMLs em `grafana/alerts/` carregam `${ALERT_WEBHOOK_TOKEN}` e `${RECEIVER_WEBHOOK_URL}`
+como placeholder — o valor só existe no ambiente de quem publica. É o que permite commitar
+o contact point sem commitar o token.
+
 ## Receiver / Hermes
 
 | Variável | Quem usa | Onde está |
 | --- | --- | --- |
-| `ALERT_WEBHOOK_TOKEN` | Receiver (valida `X-Alert-Token`) e contact point do Grafana | `.env` local/EC2 + config do contact point (issue #12) |
+| `ALERT_WEBHOOK_TOKEN` | Receiver (valida `X-Alert-Token` ou `Authorization: Bearer`) e contact point do Grafana | SSM `/ops-centro/prod/` → `.env` da EC2 + `--apply` do contact point (issue #12) |
+| `ALERT_ENRICHMENT_TIMEOUT` | Receiver (deadline da consulta ao Turso, default 2s) | `.env` EC2 — não é segredo |
+| `GRAFANA_TEMPO_DS_UID` | Receiver (link do trace na mensagem enriquecida) | `.env` EC2 (default `grafanacloud-traces`) |
 | `HERMES_WEBHOOK_URL` | Receiver → Hermes | `.env` EC2 (fase 3) |
+
+Na EC2 nenhum destes é digitado à mão: `deploy/env-from-ssm.sh` monta o `.env` (modo 600) a
+partir do **AWS SSM Parameter Store** (`/ops-centro/prod/*`, os segredos como
+`SecureString`). Rotação = `aws ssm put-parameter` + rodar o script + `./deploy.sh`. Ver
+[deploy.md §3](deploy.md#3-segredos-ssm-parameter-store-nunca-arquivo-commitado-rnf06).
+
+O CD publica a imagem no GHCR com o `GITHUB_TOKEN` da própria run (`packages: write`) — não
+há PAT envolvido. Se o pacote ficar privado, a EC2 precisa de um PAT com `read:packages`
+só para o `docker login`.
 
 ## Turso (logs de longa retenção — issue #8)
 

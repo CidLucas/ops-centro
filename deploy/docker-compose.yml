@@ -1,0 +1,58 @@
+# Stack de produção do receiver na EC2 do Hermes (issue #13, docs/deploy.md).
+#
+# Diferenças para o docker-compose.yml da raiz (que é de desenvolvimento):
+#   - imagem vem do GHCR (publicada pelo CD), não de `build: .` — a EC2 não compila;
+#   - a porta abre só no loopback: quem fala com a internet é o proxy;
+#   - logs rotacionados (disco de EC2 pequena enche em silêncio);
+#   - Caddy opcional, atrás do profile `proxy`, para o caso de o Hermes já ter o seu.
+#
+# Grafana Cloud e Turso são serviços gerenciados (free tier) — não sobem aqui.
+name: ops-centro
+
+services:
+  receiver:
+    # Fixe uma tag `sha-<commit>` para congelar a versão; `latest` segue a main.
+    image: ${RECEIVER_IMAGE:-ghcr.io/cidlucas/ops-centro-receiver:latest}
+    container_name: ops-centro-receiver
+    env_file: .env
+    # 127.0.0.1 de propósito: a porta 8080 nunca fica exposta na internet, nem se o
+    # security group estiver frouxo. O proxy alcança o container pela rede do compose.
+    ports:
+      - "${RECEIVER_BIND:-127.0.0.1:8080}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # `--profile proxy` sobe o Caddy (HTTPS automático via Let's Encrypt). Se o Hermes já
+  # tem nginx/caddy na máquina, não use o profile: aponte o proxy existente para
+  # 127.0.0.1:8080 e o resto do arquivo continua valendo.
+  caddy:
+    profiles: ["proxy"]
+    image: caddy:2-alpine
+    container_name: ops-centro-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80" # necessária para o desafio HTTP-01 do Let's Encrypt
+      - "443:443"
+    environment:
+      RECEIVER_DOMAIN: ${RECEIVER_DOMAIN:?defina RECEIVER_DOMAIN no .env}
+      ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificados: sem volume, cada restart pede um novo (rate limit)
+      - caddy_config:/config
+    depends_on:
+      - receiver
+
+volumes:
+  caddy_data:
+  caddy_config:

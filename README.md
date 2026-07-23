@@ -23,12 +23,13 @@ apps ──OTLP──▶ Grafana Cloud (Prom + Loki + Tempo, free tier)
 | --- | --- | --- |
 | Convenções de telemetria | [`ops_centro/conventions.py`](ops_centro/conventions.py) | Schema comum (RF02/RNF05): `app_name`, `environment`, `tenant_id`, `version` + nomes canônicos de spans |
 | Catálogo de métricas | [`ops_centro/metrics.py`](ops_centro/metrics.py) | As métricas prioritárias da §7 com tipo, unidade e labels fechadas — gera os painéis e é conferível contra o Prometheus ([docs](docs/metricas-prioritarias.md)) |
-| Receiver de alertas | [`ops_centro/receiver/`](ops_centro/receiver/) | FastAPI que recebe o webhook do Grafana, enriquece via Turso e aciona o Hermes |
+| Receiver de alertas | [`ops_centro/receiver/`](ops_centro/receiver/) | FastAPI que recebe o webhook do Grafana e enriquece com o contexto do Turso — trace, logs correlacionados e links prontos ([docs](docs/alertas.md)) |
 | Migrations Turso | [`db/migrations/`](db/migrations/) | Tabela `logs` de longa retenção correlacionada por `trace_id` (RF05) |
 | Writer de logs | [`ops_centro/turso/`](ops_centro/turso/) | `log_to_turso(...)` em batch numa thread daemon (RNF04) + aplicador de migrations — ver [docs/turso-logs.md](docs/turso-logs.md) |
 | Retenção dos logs | [`ops_centro/turso/retention.py`](ops_centro/turso/retention.py) | Janela por nível + job diário de limpeza, com métricas próprias e alerta de teto do free tier ([docs](docs/turso-retencao.md)) |
 | Dashboards as-code | [`ops_centro/grafana/`](ops_centro/grafana/) → [`grafana/dashboards/`](grafana/dashboards/) | Quatro dashboards gerados a partir do catálogo e publicados por API de forma idempotente ([docs](docs/dashboards.md)) |
-| Alertas as-code | [`grafana/alerts/`](grafana/alerts/) | Regras em formato de provisionamento do Grafana Alerting |
+| Alertas as-code | [`ops_centro/grafana/alerts.py`](ops_centro/grafana/alerts.py) → [`grafana/alerts/`](grafana/alerts/) | Regras sobre as métricas da §7, alerta do próprio free tier, contact point e roteamento — gerados e publicados por API ([docs](docs/alertas.md)) |
+| Deploy na EC2 | [`deploy/`](deploy/) | Compose de produção (imagem do GHCR + Caddy opcional), `.env` vindo do SSM e script de deploy com verificação de `/healthz` ([docs](docs/deploy.md)) |
 | Validação da Fase 1 | [`ops_centro/validation.py`](ops_centro/validation.py) | Checklist executável de chegada de sinais no Grafana Cloud — [roteiro](docs/validacao-fase1.md) e [baseline de free tier](docs/free-tier-baseline.md) |
 
 A instrumentação dos apps usa a lib [`blu_observability_bootstrap`](https://github.com/CidLucas/repo_platform/tree/main/libs/blu_observability_bootstrap) do repo_platform, consumida aqui como dependência git pinada por commit (ver `[tool.uv.sources]` no [pyproject.toml](pyproject.toml)).
@@ -56,11 +57,21 @@ make dashboards-apply # publica no Grafana Cloud (idempotente)
 make retention-dry    # o que a retenção de logs apagaria (docs/turso-retencao.md)
 ```
 
+Fase 3 — alertas, enriquecimento e deploy:
+
+```bash
+make alerts           # (re)gera grafana/alerts/*.yaml (docs/alertas.md)
+make alerts-list      # regras e limiares em uma tabela
+make alerts-apply     # publica regras, contact point e roteamento no Grafana Cloud
+cd deploy && ./env-from-ssm.sh && ./deploy.sh --proxy   # na EC2 (docs/deploy.md)
+```
+
 ## CI/CD
 
 Mesmo modelo do mcp_brain:
 
 - **[ci.yml](.github/workflows/ci.yml)** — lint (ruff), varredura de segredos (gitleaks), audit de deps (pip-audit, não-bloqueante) e testes unit com piso de cobertura. Roda em todo push e PR para `main`.
-- **[cd.yml](.github/workflows/cd.yml)** — build local da imagem Docker, smoke (entrypoints importam, roda non-root) e validação do compose. Roda em push na `main` e tags `v*`.
+- **[cd.yml](.github/workflows/cd.yml)** — build da imagem Docker, smoke (entrypoints importam, roda non-root, `/healthz` responde) e **publicação no GHCR**, de onde a EC2 faz `pull`. Roda em push na `main` e tags `v*`.
 - **[retention.yml](.github/workflows/retention.yml)** — job diário de limpeza dos logs no Turso (issue #9); sobe o relatório de cada run como artefato.
+- **[healthcheck.yml](.github/workflows/healthcheck.yml)** — bate no `/healthz` público a cada 30 min e vigia o vencimento do certificado (issue #13).
 - **Proteção da `main`** — ruleset versionado em [.github/rulesets/protect-main.json](.github/rulesets/protect-main.json); status em [.github/BRANCH-PROTECTION.md](.github/BRANCH-PROTECTION.md).

@@ -14,6 +14,10 @@ dependencies = [
     "pydantic>=2.7.0",
     "python-dotenv>=1.0.0",
     "libsql>=0.1.0",
+    # Alertas as-code: o formato de provisioning do Grafana Alerting é YAML
+    # (ops_centro/grafana/alerts.py). Já vinha transitivamente pela lib de
+    # observabilidade; declarado aqui porque agora é dependência direta.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

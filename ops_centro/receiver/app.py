@@ -1,12 +1,12 @@
 """Receiver de alertas do Grafana (RF06/RF07).
 
-Fluxo alvo: Grafana Cloud dispara webhook → este serviço valida o token, consulta
-contexto adicional no Turso (correlação por trace_id) e repassa mensagem
-enriquecida ao Hermes, que notifica o Telegram.
+Fluxo: Grafana Cloud dispara webhook → este serviço valida o token, consulta contexto
+adicional no Turso (correlação por trace_id, `receiver/enrichment.py`) e devolve a
+mensagem enriquecida, que o envio ao Hermes/Telegram consome (issue #15).
 
-Estado atual: skeleton com auth por token compartilhado e persistência do fluxo
-pendente nas issues (enriquecimento via Turso, envio ao Hermes). O endpoint já
-aceita o payload padrão de webhook do Grafana Alerting.
+Estado atual: auth por token compartilhado + enriquecimento (issue #14). O repasse ao
+Hermes é a issue #15 — hoje o payload enriquecido sai no log estruturado e no corpo da
+resposta, que é o que o teste de ponta a ponta consegue verificar.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
+from typing import Any
 
 from blu_observability_bootstrap import setup_observability, shutdown_observability
 from fastapi import FastAPI, Header, HTTPException, status
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 from ops_centro import __version__
 from ops_centro.conventions import APP_OPS_CENTRO, build_resource_attributes
 from ops_centro.metrics import common_labels
+from ops_centro.receiver.enrichment import enrich_alerts, summarize
 from ops_centro.turso import shutdown_log_writer
 
 logger = logging.getLogger(__name__)
@@ -112,22 +114,39 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "app": APP_OPS_CENTRO, "version": __version__}
 
 
+def _presented_token(x_alert_token: str | None, authorization: str | None) -> str | None:
+    """Token apresentado pelo chamador, nos dois formatos aceitos.
+
+    `X-Alert-Token` é o do contrato da issue #12 e o que se usa num `curl` de teste.
+    `Authorization: Bearer` existe porque o contact point `webhook` do Grafana suporta
+    esse esquema em qualquer versão, enquanto headers customizados só nas mais novas — o
+    contact point as-code manda os dois (grafana/alerts/roteamento.yaml).
+    """
+    if x_alert_token:
+        return x_alert_token
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip() or None
+    return None
+
+
 @app.post("/alerts/grafana", status_code=status.HTTP_202_ACCEPTED)
 async def receive_grafana_alert(
     payload: GrafanaWebhookPayload,
     x_alert_token: str | None = Header(default=None),
-) -> dict[str, str]:
-    """Recebe o webhook do Grafana Alerting (RF06).
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Recebe o webhook do Grafana Alerting, enriquece e devolve (RF06/RF07).
 
-    Auth: token compartilhado no header X-Alert-Token, configurado também no
-    contact point do Grafana (RNF06: token vem de env var, nunca de código).
+    Auth: token compartilhado, configurado também no contact point do Grafana
+    (RNF06: token vem de env var, nunca de código).
     """
     expected = _expected_token()
     if expected is None:
         # Sem token configurado o endpoint é inoperante de propósito: falhar
         # fechado evita aceitar webhook não autenticado em produção.
         raise HTTPException(status_code=503, detail="ALERT_WEBHOOK_TOKEN não configurado")
-    if not x_alert_token or not secrets.compare_digest(x_alert_token, expected):
+    apresentado = _presented_token(x_alert_token, authorization)
+    if not apresentado or not secrets.compare_digest(apresentado, expected):
         raise HTTPException(status_code=401, detail="token inválido")
 
     logger.info(
@@ -136,5 +155,11 @@ async def receive_grafana_alert(
     )
     _record_alert(payload.status)
 
-    # TODO(fase 3): enriquecer com contexto do Turso (trace_id) e enviar ao Hermes.
-    return {"result": "accepted", "alerts": str(len(payload.alerts))}
+    # Enriquecimento com contexto do Turso (issue #14). Tem deadline próprio e nunca
+    # levanta: alerta sem contexto ainda é alerta, alerta atrasado não é.
+    enriquecidos = await enrich_alerts(payload.alerts)
+    resumo = summarize(enriquecidos)
+    logger.info("alerta enriquecido", extra=resumo)
+
+    # TODO(#15): repassar `alerts` ao Hermes, que formata e manda no Telegram.
+    return {"result": "accepted", **resumo, "alerts_detail": [e.as_dict() for e in enriquecidos]}

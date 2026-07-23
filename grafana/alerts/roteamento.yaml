@@ -1,0 +1,56 @@
+# Contact point e notification policy — issue #12.
+#
+# Para onde os alertas vão: o contact point `ops-centro-hermes` é o webhook do receiver
+# deste repo (`POST /alerts/grafana`), que enriquece com o contexto do Turso (#14) e
+# repassa ao Hermes/Telegram (#15).
+#
+# **Autenticação (RNF06):** nenhum segredo aqui. `${ALERT_WEBHOOK_TOKEN}` e
+# `${RECEIVER_WEBHOOK_URL}` são resolvidos do ambiente — pelo próprio Grafana no
+# provisionamento por arquivo, e pelo `--apply` antes de chamar a API. O token vai nos dois
+# formatos que o receiver aceita: header `X-Alert-Token` (o do contrato da issue) e
+# `Authorization: Bearer` (que toda versão do contact point webhook suporta, mesmo as
+# anteriores ao suporte a headers customizados).
+#
+# **Agrupamento:** por `alertname` + `app_name` + `tenant_id`. Sem isso, um incidente que
+# atinge 40 tenants vira 40 mensagens no Telegram — a tempestade de alertas que faz as
+# pessoas silenciarem o canal. Com isso, vira uma mensagem que diz quantos tenants.
+#
+# > A aplicação da policy **substitui a árvore de roteamento do org** (é uma só no Grafana).
+# > Num stack com roteamento pré-existente, use `--skip-policy` e faça a mudança na mão.
+
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: ops-centro-hermes
+    receivers:
+      - uid: ops-centro-hermes-webhook
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: ${RECEIVER_WEBHOOK_URL}
+          httpMethod: POST
+          maxAlerts: 20
+          authorization_scheme: Bearer
+          authorization_credentials: ${ALERT_WEBHOOK_TOKEN}
+          headers:
+            X-Alert-Token: ${ALERT_WEBHOOK_TOKEN}
+policies:
+  - orgId: 1
+    receiver: ops-centro-hermes
+    group_by:
+      - alertname
+      - app_name
+      - tenant_id
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - receiver: ops-centro-hermes
+        object_matchers:
+          - - severity
+            - '='
+            - critical
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 1h
+        continue: false

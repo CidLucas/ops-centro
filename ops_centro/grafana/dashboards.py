@@ -767,6 +767,15 @@ class GrafanaAPI:
             timeout=httpx.Timeout(30.0),
         )
 
+    def _put(self, path: str, payload: dict) -> httpx.Response:
+        """PUT — usado pela publicação de alertas (issue #12), que é idempotente por uid."""
+        return httpx.put(
+            f"{self.base_url}{path}",
+            json=payload,
+            headers=self._headers(),
+            timeout=httpx.Timeout(30.0),
+        )
+
     def _get(self, path: str) -> httpx.Response:
         return httpx.get(f"{self.base_url}{path}", headers=self._headers(),
                          timeout=httpx.Timeout(30.0))

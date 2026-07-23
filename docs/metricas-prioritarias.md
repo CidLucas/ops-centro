@@ -51,6 +51,8 @@ make metrics-check    # consulta o Prometheus do stack, métrica por métrica
 | Métrica | Emitida por |
 | --- | --- |
 | `ops_centro_alerts_received_total{status}` | receiver, a cada webhook aceito (RF06) |
+| `ops_centro_alert_enrichment_total{status}` | receiver, a cada consulta de contexto no Turso ([#14](alertas.md#4-enriquecimento-issue-14)) — `error` = alerta saiu sem contexto |
+| `ops_centro_alert_enrichment_duration_seconds` | idem: encostar no deadline é o aviso de que os alertas vão começar a chegar pelados |
 | `ops_centro_log_retention_deleted_total{level}` | job de [retenção](turso-retencao.md) |
 | `ops_centro_log_retention_duration_seconds` | idem |
 | `ops_centro_logs_rows` / `ops_centro_logs_db_bytes` | idem |

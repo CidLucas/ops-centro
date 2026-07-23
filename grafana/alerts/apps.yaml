@@ -1,0 +1,318 @@
+# Alertas das métricas prioritárias da §7 — issue #12.
+#
+# Um alerta por pergunta do plano: "os agentes estão errando?", "estão lentos?",
+# "a ingestão está falhando?", "algum cliente específico está sofrendo?".
+#
+# Limiares: ponto de partida da Fase 3. Recalibrar com duas semanas de tráfego real
+# (o histograma dos p95 vira o piso; a taxa de erro em regime vira a média + folga).
+#
+# Toda regra agrupa por `app_name`/`environment` — as labels do schema comum (RF02)
+# precisam chegar ao alerta para o enriquecimento do receiver (#14) achar os logs
+# correlacionados no Turso e para a notification policy agrupar por app e tenant.
+
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: ops-centro-apps
+    folder: Ops Centro
+    interval: 1m
+    rules:
+      - uid: ops-centro-agents-erro-execucao
+        title: 'Agents Platform: taxa de erro de execução acima de 5%'
+        condition: B
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Agente {{ $labels.agent }} com {{ printf "%.1f" $values.A.Value }}% de execuções em erro
+          description: |-
+            Execuções de agente com `status=error` sobre o total, na janela de 10m (item da §7: taxa de erro por agente).
+            Investigação: o alerta chega com `trace_id` quando há um; comece pelos logs correlacionados no Turso e pelo painel `ops-centro-agents-platform`.
+            5% é o limiar de partida — abaixo disso ainda é ruído de retry.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: agents-platform
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * sum by (app_name, environment, agent) (rate(agents_platform_agent_executions_total{status="error"}[10m])) / clamp_min(sum by (app_name, environment, agent) (rate(agents_platform_agent_executions_total[10m])), 1e-9)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 5
+      - uid: ops-centro-agents-erro-tool
+        title: 'Agents Platform: taxa de erro por tool MCP acima de 10%'
+        condition: B
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Tool {{ $labels.tool }} falhando em {{ printf "%.1f" $values.A.Value }}% das chamadas
+          description: |-
+            Chamadas de tool MCP com `status=error` sobre o total (item da §7: taxa de erro por tool).
+            Tolerância maior que a de execução (10% vs 5%) porque tool call tem retry por cima: o que chega ao usuário é a execução, não a tentativa.
+            Tool com falha recorrente é candidata à pausa automática do Hermes (RF09, issue #17).
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: agents-platform
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * sum by (app_name, environment, tool) (rate(agents_platform_tool_calls_total{status="error"}[10m])) / clamp_min(sum by (app_name, environment, tool) (rate(agents_platform_tool_calls_total[10m])), 1e-9)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 10
+      - uid: ops-centro-agents-p95-execucao
+        title: 'Agents Platform: p95 de execução acima de 30s'
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: p95 do agente {{ $labels.agent }} em {{ printf "%.1f" $values.A.Value }}s
+          description: |-
+            Item da §7: latência p95 de execução de agente, medida sobre o histograma (não sobre varredura de traces — no free tier isso é a diferença entre uma leitura de série e um scan no Tempo).
+            `for: 15m` é deliberado: execução de agente é naturalmente longa e cheia de cauda; alertar em 5m transformaria toda rajada em página.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: agents-platform
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: histogram_quantile(0.95, sum by (le, app_name, environment, agent) (rate(agents_platform_agent_execution_duration_seconds_bucket[10m])))
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 30
+      - uid: ops-centro-agents-p95-llm
+        title: 'Agents Platform: p95 de chamada LLM acima de 60s'
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: p95 do modelo {{ $labels.model }} em {{ printf "%.1f" $values.A.Value }}s
+          description: |-
+            Item da §7: latência p50/p95/p99 de chamadas LLM, aqui na fatia p95 por modelo.
+            Separado do p95 de execução porque a resposta é outra: p95 de LLM alto com execução normal é degradação do provedor, não do nosso código.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: agents-platform
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: histogram_quantile(0.95, sum by (le, app_name, environment, model) (rate(agents_platform_llm_call_duration_seconds_bucket[10m])))
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 60
+      - uid: ops-centro-file-memory-falha-ingestao
+        title: 'File Memory: falha de ingestão acima de 10% numa etapa'
+        condition: B
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Etapa {{ $labels.stage }} da ingestão falhando em {{ printf "%.1f" $values.A.Value }}% dos arquivos
+          description: |-
+            Item da §7: taxa de falha na ingestão de arquivos, por etapa do pipeline (RF04).
+            A label `stage` já diz onde o funil estreita — o painel do funil em `ops-centro-file-memory` mostra as etapas anteriores na mesma janela.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: file-memory-mcp
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * sum by (app_name, environment, stage) (rate(context_mcp_ingestion_stage_total{status="error"}[10m])) / clamp_min(sum by (app_name, environment, stage) (rate(context_mcp_ingestion_stage_total[10m])), 1e-9)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 10
+      - uid: ops-centro-file-memory-erro-tool
+        title: 'File Memory: taxa de erro por tool MCP acima de 10%'
+        condition: B
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Tool {{ $labels.tool }} falhando em {{ printf "%.1f" $values.A.Value }}% das chamadas
+          description: |-
+            Chamadas de tool MCP do serviço de memória com `status=error` (§7).
+            Esta é a métrica que já está em produção hoje (`context_mcp_*` no mcp_brain), então é a primeira regra que passa a valer de verdade.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: file-memory-mcp
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * sum by (app_name, environment, tool) (rate(context_mcp_tool_calls_total{status="error"}[10m])) / clamp_min(sum by (app_name, environment, tool) (rate(context_mcp_tool_calls_total[10m])), 1e-9)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 10
+      - uid: ops-centro-file-memory-p95-query
+        title: 'File Memory: p95 de query de memória acima de 5s'
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: p95 de query {{ $labels.query_type }} em {{ printf "%.1f" $values.A.Value }}s
+          description: |-
+            Item da §7: latência de queries MCP do serviço de memória.
+            Query de memória entra no caminho quente de um agente: 5s aqui viram 5s a mais em toda execução que a consulta.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: file-memory-mcp
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: histogram_quantile(0.95, sum by (le, app_name, environment, query_type) (rate(context_mcp_memory_query_duration_seconds_bucket[10m])))
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 5
+      - uid: ops-centro-tenant-erro
+        title: Tenant específico com mais de 20% de erro nas execuções
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Tenant {{ $labels.tenant_id }} com {{ printf "%.1f" $values.A.Value }}% de erro
+          description: |-
+            Erro concentrado num cliente é o caso que a média global esconde: 20% para um tenant pode ser 1% no agregado.
+            Crítico por isso, e não pelo volume — é o alerta que responde 'quem está sofrendo' (§7: volume por tenant + RNF05).
+            A label `tenant_id` chega ao Hermes e vira a chave da consulta ao Turso (#14).
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: critical
+          component: agents-platform
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * sum by (app_name, environment, tenant_id) (rate(agents_platform_tenant_executions_total{status="error"}[10m])) / clamp_min(sum by (app_name, environment, tenant_id) (rate(agents_platform_tenant_executions_total[10m])), 1e-9)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 20

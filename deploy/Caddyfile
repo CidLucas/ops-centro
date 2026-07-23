@@ -1,0 +1,33 @@
+# Proxy HTTPS do receiver (issue #13). Certificado automático via Let's Encrypt — é o
+# motivo de o Caddy estar aqui em vez de nginx: um arquivo, zero cron de renovação.
+#
+# Só duas rotas passam. O receiver não tem mais nada público, e o que não existe não
+# precisa ser defendido — /docs e /openapi do FastAPI ficam de fora de propósito.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$RECEIVER_DOMAIN} {
+	encode zstd gzip
+
+	# Webhook do Grafana Alerting. A autenticação é do receiver (token no header), não do
+	# proxy: assim um `curl` de teste e o Grafana passam pelo mesmo caminho.
+	handle /alerts/grafana {
+		reverse_proxy receiver:8080
+	}
+
+	handle /healthz {
+		reverse_proxy receiver:8080
+	}
+
+	# Qualquer outra rota some. 404 e não 403: não confirma o que existe atrás.
+	handle {
+		respond "not found" 404
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

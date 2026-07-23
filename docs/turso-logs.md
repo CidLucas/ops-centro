@@ -104,3 +104,23 @@ configuração e runbook em [turso-retencao.md](turso-retencao.md).
 make retention-dry   # o que sairia, por nível
 make retention       # aplica
 ```
+
+## 5. Leitura: enriquecimento de alertas (issue #14)
+
+O contrapeso do writer. Quando um alerta chega ao receiver, o `trace_id` das labels vira a
+chave de busca em [`ops_centro/turso/log_reader.py`](../ops_centro/turso/log_reader.py):
+
+```python
+from ops_centro.turso.log_reader import related_logs
+linhas, estrategia = related_logs(conn, trace_id=..., app_name=..., tenant_id=...)
+```
+
+Sem `trace_id` (o caso comum — alerta nasce de série agregada, não de execução), a busca
+cai para a janela recente do app/tenant, e só nos níveis que valem investigação
+(ERROR/CRITICAL/WARNING): INFO em janela larga afoga a linha que importa e gasta row reads
+do free tier. Os dois caminhos batem em índice da migration 0001 (`idx_logs_trace_id`,
+`idx_logs_app_time`, `idx_logs_tenant_time`) — nenhum faz full scan.
+
+É por isso que vale gravar o `trace_id` mesmo quando parece redundante: é ele que
+transforma "taxa de erro passou de 5%" em "estas cinco linhas de log são o que aconteceu".
+Fluxo completo em [alertas.md §4](alertas.md#4-enriquecimento-issue-14).

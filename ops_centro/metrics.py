@@ -290,6 +290,28 @@ CATALOG: tuple[Metric, ...] = (
         status=EMITTING,
     ),
     Metric(
+        name="ops_centro_alert_enrichment_total",
+        app=APP_OPS_CENTRO,
+        kind=COUNTER,
+        unit="1",
+        labels=("status",),
+        item=ITEM_SELF,
+        description="Enriquecimentos de alerta tentados, por desfecho (RF07, issue #14). "
+        "`error` = o Turso não respondeu dentro do deadline e o alerta saiu sem contexto.",
+        status=EMITTING,
+    ),
+    Metric(
+        name="ops_centro_alert_enrichment_duration_seconds",
+        app=APP_OPS_CENTRO,
+        kind=HISTOGRAM,
+        unit="s",
+        labels=(),
+        item=ITEM_SELF,
+        description="Duração da consulta de contexto no Turso — encostar no deadline "
+        "(ALERT_ENRICHMENT_TIMEOUT) é o aviso de que os alertas vão começar a chegar pelados.",
+        status=EMITTING,
+    ),
+    Metric(
         name="ops_centro_log_retention_deleted_total",
         app=APP_OPS_CENTRO,
         kind=COUNTER,
