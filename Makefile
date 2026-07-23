@@ -38,6 +38,14 @@ migrate: ## Aplica as migrations no Turso (TURSO_DATABASE_URL)
 migrate-status: ## Lista as migrations já aplicadas
 	uv run python -m ops_centro.turso.migrate --status
 
+# ---------------------------------------------------------- validação -------
+.PHONY: validate validate-json
+validate: ## Checklist de sinais no Grafana Cloud (issue #6)
+	uv run python -m ops_centro.validation
+
+validate-json: ## Mesmo checklist em JSON (para o baseline de free tier)
+	uv run python -m ops_centro.validation --json
+
 # -------------------------------------------------------------- docker ------
 .PHONY: up down logs ps build
 up: ## Sobe a stack em background

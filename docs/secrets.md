@@ -17,6 +17,20 @@ Rotação: gerar novo token em Grafana Cloud → Access Policies, atualizar os
 secrets nos 3 repos (`gh secret set`) e os `.env` locais/EC2. O token atual é de
 **dev**; criar token separado para prod quando houver ambiente prod.
 
+## Grafana Cloud — leitura (issue #6)
+
+O token OTLP acima é **write-only**; validar os sinais e medir o baseline exige uma
+Access Policy separada com `metrics:read`, `logs:read`, `traces:read`.
+
+| Variável | Formato | Quem usa | Onde está |
+| --- | --- | --- | --- |
+| `GRAFANA_READ_TOKEN` | `glc_...` (policy de leitura) | `ops_centro.validation` (`make validate`) | `.env` local |
+| `GRAFANA_PROM_URL` / `GRAFANA_PROM_USER` | URL + id do datasource Prometheus | idem | idem |
+| `GRAFANA_LOKI_URL` / `GRAFANA_LOKI_USER` | URL + id do datasource Loki | idem | idem |
+| `GRAFANA_TEMPO_URL` / `GRAFANA_TEMPO_USER` | URL + id do datasource Tempo | idem | idem |
+
+Os user IDs dos datasources são diferentes do `1733152` do gateway OTLP (Stack → Details).
+
 ## Receiver / Hermes
 
 | Variável | Quem usa | Onde está |

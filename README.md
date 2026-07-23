@@ -26,6 +26,7 @@ apps ──OTLP──▶ Grafana Cloud (Prom + Loki + Tempo, free tier)
 | Migrations Turso | [`db/migrations/`](db/migrations/) | Tabela `logs` de longa retenção correlacionada por `trace_id` (RF05) |
 | Writer de logs | [`ops_centro/turso/`](ops_centro/turso/) | `log_to_turso(...)` em batch numa thread daemon (RNF04) + aplicador de migrations — ver [docs/turso-logs.md](docs/turso-logs.md) |
 | Dashboards/alertas as-code | `grafana/` | JSON de dashboards e regras de alerta versionados (fase 2/3) |
+| Validação da Fase 1 | [`ops_centro/validation.py`](ops_centro/validation.py) | Checklist executável de chegada de sinais no Grafana Cloud — [roteiro](docs/validacao-fase1.md) e [baseline de free tier](docs/free-tier-baseline.md) |
 
 A instrumentação dos apps usa a lib [`blu_observability_bootstrap`](https://github.com/CidLucas/repo_platform/tree/main/libs/blu_observability_bootstrap) do repo_platform, consumida aqui como dependência git pinada por commit (ver `[tool.uv.sources]` no [pyproject.toml](pyproject.toml)).
 
@@ -38,6 +39,7 @@ make lint      # ruff (mesmo gate do CI)
 make test      # pytest -m unit (mesmo gate do CI)
 make run       # receiver local em :8080
 make migrate   # aplica as migrations no Turso (docs/turso-logs.md)
+make validate  # checklist de sinais no Grafana Cloud (docs/validacao-fase1.md)
 make up        # stack via docker compose
 ```
 
