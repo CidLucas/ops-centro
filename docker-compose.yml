@@ -1,0 +1,15 @@
+# Stack local do Ops Centro: só o receiver por ora. Grafana Cloud e Turso são
+# serviços gerenciados (free tier) — não sobem aqui.
+services:
+  receiver:
+    build: .
+    image: ops-centro-receiver:local
+    env_file: .env
+    ports:
+      - "${RECEIVER_PORT:-8080}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

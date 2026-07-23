@@ -1,0 +1,25 @@
+# Atualizações automáticas de dependências (mesmo modelo do mcp_brain).
+# - uv: deps Python (pyproject.toml + uv.lock) — inclui o bump da dependência git
+#   do blu_observability_bootstrap quando o rev for movido manualmente.
+# - github-actions: versões das actions usadas nos workflows de CI/CD.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "P2"]
+    groups:
+      python-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["ci", "dependencies"]
+    groups:
+      actions:
+        patterns: ["*"]

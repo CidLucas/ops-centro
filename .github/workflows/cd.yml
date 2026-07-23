@@ -1,0 +1,83 @@
+name: CD (build local das imagens)
+
+# Build de entrega (modelado no CD do mcp_brain): constrói a imagem Docker
+# localmente no runner (SEM push para registry), valida que ela sobe e está bem
+# cabeada, e checa o docker-compose. Gate de "a imagem de produção builda e importa".
+#
+# Para publicar em registry depois, é só adicionar login + push:true no step de build.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-image:
+    name: Build + smoke da imagem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build LOCAL: push=false, load=true carrega a imagem no daemon do runner
+      # para os steps seguintes. Cache de camadas via GitHub Actions cache.
+      - name: Build da imagem (local, sem push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ops-centro-receiver:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke: os entrypoints importam? Pega quebra de wiring/deps que o build
+      # sozinho não pega (import não exige env — sem OTLP endpoint vira no-op).
+      - name: Smoke — entrypoints importam
+        run: |
+          docker run --rm ops-centro-receiver:ci python -c "\
+          import ops_centro.receiver.app, ops_centro.conventions; \
+          print('imagem OK: entrypoints importam')"
+
+      - name: Smoke — imagem roda como non-root
+        run: |
+          uid=$(docker run --rm ops-centro-receiver:ci id -u)
+          echo "UID=$uid"
+          test "$uid" != "0" || { echo "ERRO: container rodando como root"; exit 1; }
+
+      # Scan de vulnerabilidades da imagem (Trivy). NÃO-BLOQUEANTE por ora
+      # (exit-code 0): levanta baseline de CVEs sem travar o CD. Promova a
+      # exit-code 1 (HIGH/CRITICAL) quando o backlog estiver tratado.
+      - name: Trivy — scan da imagem
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ops-centro-receiver:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+  validate-compose:
+    name: Valida docker-compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker compose config interpola ${VARS}; sem .env ele reclama do env_file.
+      # Usa o .env.example como base só para a validação estática.
+      - name: Prepara .env de validação
+        run: cp .env.example .env
+
+      - name: docker compose config
+        run: docker compose config -q && echo "docker-compose.yml válido"

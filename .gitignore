@@ -1,0 +1,23 @@
+# Ambiente / segredos
+.env
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Testes / cobertura
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Ferramentas
+.ruff_cache/
+.cache/
+
+# SO / editor
+.DS_Store

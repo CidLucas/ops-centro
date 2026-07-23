@@ -1,0 +1,6 @@
+# Config do gitleaks para o Ops Centro. Estende as regras default; allowlist
+# vazia de propósito — registre falsos-positivos aqui conforme aparecerem.
+title = "gitleaks — Ops Centro"
+
+[extend]
+useDefault = true

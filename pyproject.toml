@@ -1,0 +1,60 @@
+[project]
+name = "ops-centro"
+version = "0.1.0"
+description = "Observabilidade centralizada: convenções OTel, dashboards/alertas as-code e receiver de alertas (Grafana → Hermes/Telegram)"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # Lib de bootstrap de observabilidade do repo_platform (OTLP traces/logs/metrics
+    # + FastAPI instrumentation). Fonte git pinada em [tool.uv.sources].
+    "blu-observability-bootstrap",
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "libsql>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.8.0",
+]
+
+# blu_observability_bootstrap vive no monorepo repo_platform (subdirectory).
+# Pinado por commit para build reproduzível — bump deliberado, nunca implícito.
+[tool.uv.sources]
+blu-observability-bootstrap = { git = "https://github.com/CidLucas/repo_platform.git", subdirectory = "libs/blu_observability_bootstrap", rev = "061e400bb6e0af70b7aaa1c6a0daace0981ff6a2" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ops_centro"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "unit: testes determinísticos, sem dependências externas",
+    "integration: exigem Grafana Cloud/Turso/Telegram reais",
+]
+
+[tool.coverage.run]
+source = ["ops_centro"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+# Mesmo conjunto do mcp_brain: E4/E7/E9 essenciais + F pyflakes + I import-sort.
+# Gate pega bugs reais (imports não usados, nomes indefinidos), não estilo cosmético.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402", "F401", "F841"]
