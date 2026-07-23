@@ -20,6 +20,19 @@ DEST="${1:-$(cd "$(dirname "$0")" && pwd)/.env}"
 
 command -v aws >/dev/null || { echo "erro: aws CLI não instalada"; exit 2; }
 
+# Região: o `aws ssm` exige uma, e o CLI não a herda do IMDS sozinho. Ordem: o que já
+# estiver no ambiente/config, senão o IMDSv2 da própria instância (esta EC2 exige v2 —
+# token primeiro, depois a query). Numa EC2 isso resolve sem configurar nada à mão.
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+if [ -z "$REGION" ]; then
+	token=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+		-H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+	REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $token" \
+		"http://169.254.169.254/latest/meta-data/placement/region" 2>/dev/null || true)
+fi
+[ -n "$REGION" ] || { echo "erro: região não determinada (defina AWS_REGION)"; exit 2; }
+echo "região: $REGION"
+
 # umask antes de criar o arquivo: nem por um instante o .env pode ficar legível para
 # outros usuários da máquina.
 umask 077
@@ -33,6 +46,7 @@ trap 'rm -f "$TMP"' EXIT
 
 # --recursive pega subcaminhos; --with-decryption resolve os SecureString.
 aws ssm get-parameters-by-path \
+	--region "$REGION" \
 	--path "$PREFIX" \
 	--recursive \
 	--with-decryption \
