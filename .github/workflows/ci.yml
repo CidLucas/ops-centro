@@ -22,10 +22,10 @@ jobs:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -42,7 +42,7 @@ jobs:
     name: Varredura de segredos (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Histórico completo para varrer todos os commits, não só o HEAD.
           fetch-depth: 0
@@ -62,10 +62,10 @@ jobs:
     # Política: promover a bloqueante quando o backlog estiver tratado.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -82,10 +82,10 @@ jobs:
     name: Testes (unit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -101,7 +101,7 @@ jobs:
 
       - name: Sobe cobertura como artefato
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
