@@ -24,8 +24,14 @@ secrets nos 3 repos (`gh secret set`) e os `.env` locais/EC2. O token atual é d
 | `ALERT_WEBHOOK_TOKEN` | Receiver (valida `X-Alert-Token`) e contact point do Grafana | `.env` local/EC2 + config do contact point (issue #12) |
 | `HERMES_WEBHOOK_URL` | Receiver → Hermes | `.env` EC2 (fase 3) |
 
-## Turso (pendente — issue #8)
+## Turso (logs de longa retenção — issue #8)
 
-| Variável | Quem usa |
-| --- | --- |
-| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Writer de logs (apps) e enriquecimento (receiver) |
+Database `ops-centro-logs` (free tier). Provisionamento e uso em [turso-logs.md](turso-logs.md).
+
+| Variável | Formato | Quem usa | Onde está |
+| --- | --- | --- | --- |
+| `TURSO_DATABASE_URL` | `libsql://ops-centro-logs-<org>.turso.io` | Writer de logs (apps) e enriquecimento (receiver) | `.env` local/EC2 + secrets dos 3 repos |
+| `TURSO_AUTH_TOKEN` | token do database (`turso db tokens create`) | idem | idem |
+
+Rotação: `turso db tokens create ops-centro-logs` → atualizar secrets/`.env` →
+`turso db tokens invalidate ops-centro-logs` para revogar os antigos.

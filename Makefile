@@ -30,6 +30,14 @@ cov: ## Testes com relatório de cobertura
 run: ## Sobe o receiver local (porta $(RECEIVER_PORT))
 	uv run uvicorn ops_centro.receiver.app:app --reload --port $(RECEIVER_PORT)
 
+# ---------------------------------------------------------------- turso -----
+.PHONY: migrate migrate-status
+migrate: ## Aplica as migrations no Turso (TURSO_DATABASE_URL)
+	uv run python -m ops_centro.turso.migrate
+
+migrate-status: ## Lista as migrations já aplicadas
+	uv run python -m ops_centro.turso.migrate --status
+
 # -------------------------------------------------------------- docker ------
 .PHONY: up down logs ps build
 up: ## Sobe a stack em background

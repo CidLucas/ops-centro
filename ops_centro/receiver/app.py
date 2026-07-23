@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from ops_centro import __version__
 from ops_centro.conventions import APP_OPS_CENTRO, build_resource_attributes
+from ops_centro.turso import shutdown_log_writer
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,9 @@ class GrafanaWebhookPayload(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
+    # Drena o writer de logs (RF05) antes de derrubar a telemetria: o que estiver
+    # na fila ainda precisa do trace correspondente exportado.
+    shutdown_log_writer()
     await shutdown_observability()
 
 
