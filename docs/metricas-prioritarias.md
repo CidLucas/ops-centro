@@ -132,8 +132,15 @@ Custo: duas labels enumeráveis por série — as mesmas que o schema já permit
 fica de fora de propósito: mudaria a cada deploy e criaria série nova a cada release.
 
 > **Pendência cross-repo:** as quatro métricas `context_mcp_*` já em produção no
-> `mcp_brain` emitem sem esses atributos de ponto. Enquanto não forem ajustadas, elas
-> aparecem no Mimir mas reprovam no `make metrics-check` — vale uma issue lá, junto de #7.
+> `mcp_brain` emitem sem esses atributos de ponto — aparecem no Mimir, mas reprovam no
+> `make metrics-check`. Rastreado em [mcp_brain#28](https://github.com/CidLucas/mcp_brain/issues/28),
+> com o conserto na **lib compartilhada** e não no app: um app não deveria precisar saber
+> que o Grafana Cloud trata Resource diferente por tipo de sinal (o `record_metric` do
+> `blu_observability_bootstrap` tem o mesmo defeito).
+
+Detalhe que torna o bug fácil de não ver localmente: pelo `PrometheusMetricReader` (scrape
+do `/metrics`) o Resource vira `target_info` e o join funciona. É só o caminho OTLP → Grafana
+Cloud que perde os atributos — o mesmo código está certo num destino e errado no outro.
 
 Também vale para counters: emita `0` explicitamente nos casos sem ocorrência. Counter que
 nunca incrementou não cria série, e aí o painel mostra *"No data"* onde o certo é `0` —

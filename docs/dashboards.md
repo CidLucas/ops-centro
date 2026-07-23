@@ -37,8 +37,15 @@ que é o jeito clássico de as duas fontes divergirem.
 `Ops Centro`. Rodar duas vezes não cria cópia; rodar num stack zerado reconstrói tudo
 (critério de aceite do #10).
 
-Credencial: `GRAFANA_STACK_URL` + `GRAFANA_API_TOKEN` (escopo `dashboards:write`). O
-`GRAFANA_READ_TOKEN` da validação da Fase 1 **não** publica — ver [secrets.md](secrets.md).
+Credencial: `GRAFANA_STACK_URL` + `GRAFANA_API_TOKEN`, de uma service account com role
+**Editor** (precisa de `dashboards:write` **e** `folders:create`). O `GRAFANA_READ_TOKEN`
+da validação da Fase 1 é Viewer e **não** publica — ver [secrets.md](secrets.md). Token com
+role errada dá 403 com o escopo faltante no corpo; o CLI repete isso com a dica do conserto.
+
+> **Estado:** publicados em 2026-07-23 no stack `radiantfennec1578`, pasta *Ops Centro*
+> (`/d/ops-centro-visao-geral`, `/d/ops-centro-por-tenant`, `/d/ops-centro-agents-platform`,
+> `/d/ops-centro-file-memory`). Reaplicar não duplica: a segunda passada reencontra os
+> mesmos quatro uids.
 
 ## 3. Por que gerar em vez de exportar da UI
 
