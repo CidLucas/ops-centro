@@ -1,0 +1,472 @@
+{
+  "uid": "ops-centro-file-memory",
+  "title": "Ops Centro — File Memory / MCP",
+  "description": "Funil de `file_ingestion` por etapa e latência de `mcp_memory_query`. Métricas do catálogo da §7 (ops_centro/metrics.py).",
+  "tags": [
+    "ops-centro",
+    "as-code"
+  ],
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "DS_PROM",
+        "label": "Datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "hide": 0,
+        "regex": "",
+        "current": {}
+      },
+      {
+        "type": "query",
+        "name": "environment",
+        "label": "Ambiente",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROM}"
+        },
+        "definition": "label_values(environment)",
+        "query": "label_values(environment)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "sort": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "title": "Ops Centro",
+      "tags": [
+        "ops-centro",
+        "as-code"
+      ],
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Funil de ingestão (file_ingestion)",
+      "id": 1,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Etapas concluídas na janela (funil)",
+      "description": "Etapa a etapa: onde o funil estreita é onde os arquivos estão parando.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (stage) (increase(context_mcp_ingestion_stage_total{environment=~\"$environment\", status=\"ok\"}[$__range]))",
+          "refId": "A",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0
+      },
+      "id": 2,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Taxa de falha por etapa (%)",
+      "description": "Item da §7: taxa de falha na ingestão de arquivos, por etapa.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "100 * sum by (stage) (rate(context_mcp_ingestion_stage_total{environment=~\"$environment\", status=\"error\"}[$__rate_interval])) / clamp_min(sum by (stage) (rate(context_mcp_ingestion_stage_total{environment=~\"$environment\"}[$__rate_interval])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência p95 por etapa (s)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(context_mcp_ingestion_stage_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      }
+    },
+    {
+      "type": "row",
+      "title": "Queries MCP de memória (mcp_memory_query)",
+      "id": 5,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência de query (s)",
+      "description": "Item da §7: latência de queries MCP do serviço de memória.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(context_mcp_memory_query_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(context_mcp_memory_query_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "B",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(context_mcp_memory_query_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Queries/s por tipo",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (query_type) (rate(context_mcp_memory_queries_total{environment=~\"$environment\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{query_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Erro por tipo de query (%)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "100 * sum by (query_type) (rate(context_mcp_memory_queries_total{environment=~\"$environment\", status=\"error\"}[$__rate_interval])) / clamp_min(sum by (query_type) (rate(context_mcp_memory_queries_total{environment=~\"$environment\"}[$__rate_interval])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "{{query_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência p95 de tool MCP (s)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(context_mcp_tool_call_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "{{tool}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      }
+    }
+  ],
+  "version": 0
+}

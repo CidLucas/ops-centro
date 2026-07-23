@@ -89,12 +89,24 @@ duração é implícita do span.
 - **Sufixos/unidades:** counters `_total`; histogramas de latência `_duration_seconds`
   (unit OTel `"s"`, valores em segundos); tamanhos `_bytes`. Nada de `_ms`.
 - **Labels permitidas** (cardinalidade baixa, enumerável): `app_name`, `environment`,
-  `tool`, `stage`, `status`, `agent`, `model`. `tenant_id` só em métricas de volume/uso
-  (§7 do plano). **Proibido:** `session_id`, `trace_id`, `file_id`, texto livre.
+  `tool`, `stage`, `status`, `agent`, `model`, `query_type`, `level`. `tenant_id` só em
+  métricas de volume/uso (§7 do plano). **Proibido:** `session_id`, `trace_id`, `file_id`,
+  texto livre.
+  > `query_type` e `level` entraram na **v1.1** (issue [#11](https://github.com/CidLucas/ops-centro/issues/11)):
+  > o primeiro para as queries MCP do serviço de memória, o segundo para o counter de
+  > linhas removidas pela retenção. Adição aditiva — nada do v1 mudou.
 - `status` em métricas usa o vocabulário `ok` | `error` (já adotado pelo `context_mcp_*`).
+- **`app_name` e `environment` vão como atributo do ponto**, não só no Resource: a ingestão
+  OTLP do Grafana Cloud não promove resource attribute a label de métrica (medido em
+  2026-07-23). Use `ops_centro.metrics.common_labels()` — detalhe e consequência em
+  [metricas-prioritarias.md §4](metricas-prioritarias.md#4-rf02-em-métricas-atributo-do-ponto-não-do-resource-️).
 
 Métricas prioritárias (§7) derivam dos spans acima ou destes instrumentos — antes de criar
-uma métrica nova, verifique se uma query no Tempo sobre os spans não resolve.
+uma métrica nova, verifique se uma query no Tempo sobre os spans não resolve. O conjunto
+completo, com tipo, unidade e labels de cada uma, vive em
+[`ops_centro/metrics.py`](../ops_centro/metrics.py) e está documentado em
+[metricas-prioritarias.md](metricas-prioritarias.md) — é o catálogo que gera os painéis
+([dashboards.md](dashboards.md)) e que `make metrics-check` confere contra o Prometheus.
 
 ## 4. Mecanismo de compartilhamento (decisão)
 

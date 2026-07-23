@@ -1,0 +1,767 @@
+{
+  "uid": "ops-centro-agents-platform",
+  "title": "Ops Centro — Agents Platform",
+  "description": "Drill-down de `agent_execution` e `mcp_tool_call`: latência, erro, tokens, custo e modelo. Métricas do catálogo da §7 (ops_centro/metrics.py).",
+  "tags": [
+    "ops-centro",
+    "as-code"
+  ],
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "DS_PROM",
+        "label": "Datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "hide": 0,
+        "regex": "",
+        "current": {}
+      },
+      {
+        "type": "query",
+        "name": "environment",
+        "label": "Ambiente",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROM}"
+        },
+        "definition": "label_values(environment)",
+        "query": "label_values(environment)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "sort": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "title": "Ops Centro",
+      "tags": [
+        "ops-centro",
+        "as-code"
+      ],
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "agent_execution",
+      "id": 1,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência de execução (s)",
+      "description": "p50/p95/p99 da §7, sobre o histograma — não sobre varredura de traces.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(agents_platform_agent_execution_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(agents_platform_agent_execution_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "B",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(agents_platform_agent_execution_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Execuções/s por agente e desfecho",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (agent, status) (rate(agents_platform_agent_executions_total{environment=~\"$environment\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{agent}} · {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      }
+    },
+    {
+      "type": "row",
+      "title": "mcp_tool_call",
+      "id": 4,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência de tool (s)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le, tool) (rate(agents_platform_tool_call_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "p50 {{tool}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(agents_platform_tool_call_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "B",
+          "legendFormat": "p95 {{tool}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Erro por tool (%)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "100 * sum by (tool) (rate(agents_platform_tool_calls_total{environment=~\"$environment\", status=\"error\"}[$__rate_interval])) / clamp_min(sum by (tool) (rate(agents_platform_tool_calls_total{environment=~\"$environment\"}[$__rate_interval])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "{{tool}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Chamadas por tool (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (tool) (increase(agents_platform_tool_calls_total{environment=~\"$environment\"}[$__range]))",
+          "refId": "A",
+          "legendFormat": "{{tool}}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0
+      },
+      "id": 7,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Erros por tool (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (tool) (increase(agents_platform_tool_calls_total{environment=~\"$environment\", status=\"error\"}[$__range]))",
+          "refId": "A",
+          "legendFormat": "{{tool}}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0
+      },
+      "id": 8,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      }
+    },
+    {
+      "type": "row",
+      "title": "LLM — tokens, custo e modelo",
+      "id": 9,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência de chamada LLM (s)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le, model) (rate(agents_platform_llm_call_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "p50 {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(agents_platform_llm_call_duration_seconds_bucket{environment=~\"$environment\"}[$__rate_interval])))",
+          "refId": "B",
+          "legendFormat": "p95 {{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens/s por modelo",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (model) (rate(agents_platform_llm_tokens_input_total{environment=~\"$environment\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "entrada · {{model}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (model) (rate(agents_platform_llm_tokens_output_total{environment=~\"$environment\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "saída · {{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Custo na janela (USD)",
+      "description": "Só conta o que o app conseguiu calcular (cost_usd é opcional no schema).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum(increase(agents_platform_llm_cost_usd_total{environment=~\"$environment\"}[$__range]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "custom": {},
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 35
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Tokens de entrada (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum(increase(agents_platform_llm_tokens_input_total{environment=~\"$environment\"}[$__range]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "id": 13,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 35
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Tokens de saída (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum(increase(agents_platform_llm_tokens_output_total{environment=~\"$environment\"}[$__range]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "id": 14,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 35
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Erro em chamadas LLM (%)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "100 * sum(rate(agents_platform_llm_calls_total{environment=~\"$environment\", status=\"error\"}[$__rate_interval])) / clamp_min(sum(rate(agents_platform_llm_calls_total{environment=~\"$environment\"}[$__rate_interval])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {},
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "id": 15,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 35
+      }
+    },
+    {
+      "type": "table",
+      "title": "Custo por modelo (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (model) (increase(agents_platform_llm_cost_usd_total{environment=~\"$environment\"}[$__range]))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            }
+          }
+        }
+      ],
+      "id": 16,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      }
+    }
+  ],
+  "version": 0
+}

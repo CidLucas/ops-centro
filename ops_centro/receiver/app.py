@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from ops_centro import __version__
 from ops_centro.conventions import APP_OPS_CENTRO, build_resource_attributes
+from ops_centro.metrics import common_labels
 from ops_centro.turso import shutdown_log_writer
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,41 @@ def _expected_token() -> str | None:
     return os.environ.get("ALERT_WEBHOOK_TOKEN") or None
 
 
+# `ops_centro_alerts_received_total` do catálogo da §7 (ops_centro/metrics.py). O
+# instrumento é criado na primeira chamada porque o MeterProvider só existe depois do
+# setup_observability acima — e sem OTLP configurado ele é um no-op do próprio SDK.
+_alerts_counter: object | None = None
+
+
+def _record_alert(alert_status: str) -> None:
+    """Conta um webhook aceito.
+
+    O label `status` segue o vocabulário congelado do schema (`ok` | `error`), não o
+    `firing`/`resolved` do Grafana: alerta disparando é a condição de erro, alerta
+    resolvido é o retorno ao normal. Métrica é observação de saúde, não eco do payload.
+    """
+    global _alerts_counter
+    try:
+        if _alerts_counter is None:
+            from opentelemetry import metrics as otel_metrics
+
+            _alerts_counter = otel_metrics.get_meter("ops_centro.receiver").create_counter(
+                "ops_centro_alerts_received_total",
+                description="Alertas recebidos do Grafana pelo receiver (RF06)",
+            )
+        # `app_name`/`environment` como atributo do ponto: o Grafana Cloud não promove
+        # resource attribute a label de métrica (ops_centro.metrics.common_labels).
+        _alerts_counter.add(
+            1,
+            {
+                **common_labels(APP_OPS_CENTRO),
+                "status": "ok" if alert_status == "resolved" else "error",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — telemetria nunca derruba o webhook
+        logger.debug("falha ao contar o alerta recebido: %s", exc)
+
+
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok", "app": APP_OPS_CENTRO, "version": __version__}
@@ -98,6 +134,7 @@ async def receive_grafana_alert(
         "alerta recebido do Grafana",
         extra={"alert_status": payload.status, "alert_count": len(payload.alerts)},
     )
+    _record_alert(payload.status)
 
     # TODO(fase 3): enriquecer com contexto do Turso (trace_id) e enviar ao Hermes.
     return {"result": "accepted", "alerts": str(len(payload.alerts))}

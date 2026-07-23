@@ -1,0 +1,110 @@
+name: Retenção de logs (Turso)
+
+# Job de limpeza da tabela `logs` no Turso — issue #9, mitigação do risco §10
+# ("custo do Turso crescer com volume de logs").
+#
+# Roda aqui, e não num cron da EC2 do Hermes, por três razões: a EC2 ainda não tem
+# deploy do ops-centro (fase 3), o Actions já guarda os secrets do Turso, e a run fica
+# com log e histórico auditáveis sem SSH. Se o Hermes virar o executor depois, o comando
+# é o mesmo (`python -m ops_centro.turso.retention`).
+#
+# Cadência: diária, 04:17 UTC (~01:17 BRT) — fora do horário de uso. O VACUUM é semanal
+# (domingo), porque reescreve o banco inteiro e só compensa depois de acumular exclusões.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Só contar o que seria apagado (não apaga nada)"
+        type: boolean
+        default: false
+      vacuum:
+        description: "Rodar VACUUM ao final (caro; devolve espaço ao disco)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: retention
+  cancel-in-progress: false # limpeza interrompida no meio deixa lote pela metade
+
+permissions:
+  contents: read
+
+jobs:
+  purge:
+    name: Aplica a política de retenção
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      # Janela por nível; sem isto valem os defaults de ops_centro/turso/retention.py
+      # (ERROR 90d, WARNING 30d, INFO 14d, DEBUG 7d, demais 14d).
+      TURSO_LOG_RETENTION_DAYS: ${{ vars.TURSO_LOG_RETENTION_DAYS }}
+      # O observador também é observado: as métricas do job vão pelo mesmo OTLP dos apps.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+      ENVIRONMENT: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # Sem o secret do banco não há o que limpar. Sair verde (e não vermelho) é
+      # deliberado: um fork ou um repo recém-clonado não deve receber alerta de CI por
+      # não ter o Turso provisionado.
+      - name: Confere se o Turso está configurado
+        id: guard
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            echo "TURSO_DATABASE_URL ausente — nada a fazer nesta run."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Instala o projeto
+        if: steps.guard.outputs.configured == 'true'
+        run: uv sync --frozen
+
+      # Garante o índice (level, timestamp) da 0002 antes do primeiro DELETE — sem ele
+      # a limpeza vira full scan e gasta row reads do free tier.
+      - name: Aplica migrations pendentes
+        if: steps.guard.outputs.configured == 'true'
+        run: uv run python -m ops_centro.turso.migrate
+
+      - name: Decide as flags da run
+        if: steps.guard.outputs.configured == 'true'
+        id: flags
+        run: |
+          flags=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then flags="$flags --dry-run"; fi
+          # VACUUM: aos domingos no agendado, ou sob demanda no dispatch.
+          if [ "${{ inputs.vacuum }}" = "true" ] || \
+             { [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%u)" = "7" ]; }; then
+            flags="$flags --vacuum"
+          fi
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+          echo "flags da run:${flags:- (nenhuma)}"
+
+      - name: Executa a retenção
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          uv run python -m ops_centro.turso.retention ${{ steps.flags.outputs.flags }} --json \
+            | tee retention-report.json
+
+      # O JSON da run é o "log de execução" do critério de aceite: linhas removidas por
+      # nível, tamanho do banco e duração, com retenção de 90 dias no Actions.
+      - name: Sobe o relatório da run
+        if: always() && steps.guard.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: retention-report-${{ github.run_id }}
+          path: retention-report.json
+          retention-days: 90
+          if-no-files-found: ignore

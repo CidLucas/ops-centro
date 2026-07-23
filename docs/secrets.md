@@ -32,6 +32,19 @@ Access Policy separada com `metrics:read`, `logs:read`, `traces:read`.
 
 Os user IDs dos datasources são diferentes do `1733152` do gateway OTLP (Stack → Details).
 
+## Grafana Cloud — escrita de dashboards (issue #10)
+
+Publicar dashboards as-code exige `dashboards:write`, escopo que o token de leitura acima
+não tem. Use um service account com a role *Editor* (ou uma Access Policy com
+`dashboards:write`) e o mesmo `GRAFANA_STACK_URL`.
+
+| Variável | Formato | Quem usa | Onde está |
+| --- | --- | --- | --- |
+| `GRAFANA_API_TOKEN` | `glsa_...` com `dashboards:write` | `ops_centro.grafana.dashboards` (`make dashboards-apply`) | `.env` local |
+
+Sem ele, `make dashboards` e `make dashboards-check` continuam funcionando (são offline);
+só a publicação exige credencial.
+
 ## Receiver / Hermes
 
 | Variável | Quem usa | Onde está |
@@ -50,3 +63,8 @@ Database `ops-centro-logs` (free tier). Provisionamento e uso em [turso-logs.md]
 
 Rotação: `turso db tokens create ops-centro-logs` → atualizar secrets/`.env` →
 `turso db tokens invalidate ops-centro-logs` para revogar os antigos.
+
+O job de retenção (issue #9) roda no GitHub Actions e usa `TURSO_DATABASE_URL`,
+`TURSO_AUTH_TOKEN` e os dois `OTEL_EXPORTER_OTLP_*` como **secrets do repo**; a janela de
+retenção (`TURSO_LOG_RETENTION_DAYS`) é uma *repository variable*, não secret — não há
+segredo em "ERROR fica 90 dias". Ver [turso-retencao.md](turso-retencao.md).

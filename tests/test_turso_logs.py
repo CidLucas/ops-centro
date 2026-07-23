@@ -54,7 +54,8 @@ def rows(db_path):
 # --- migration ---------------------------------------------------------------
 def test_migration_cria_tabela_e_e_idempotente(db_path):
     conn = libsql.connect(database=db_path)
-    assert apply_migrations(conn) == ["0001_create_logs"]
+    # 0002 é o índice de suporte à retenção (issue #9) — ver tests/test_retention.py
+    assert apply_migrations(conn) == ["0001_create_logs", "0002_logs_retention"]
     assert apply_migrations(conn) == []  # segunda passada não reaplica
 
     indexes = {row[1] for row in conn.execute("PRAGMA index_list(logs)").fetchall()}

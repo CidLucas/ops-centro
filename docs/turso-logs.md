@@ -95,6 +95,12 @@ Estado da adoção:
 ## 4. Retenção e custo
 
 O free tier do Turso dá ~9 GB de storage e 1 bilhão de row reads/mês. A política de
-limpeza (janela de retenção + job de purge) é a issue
-[#9](https://github.com/CidLucas/ops-centro/issues/9) — até ela existir, monitore o
-tamanho com `turso db inspect ops-centro-logs`.
+limpeza está implementada (issue [#9](https://github.com/CidLucas/ops-centro/issues/9)):
+janela por nível (ERROR 90d, WARNING 30d, INFO 14d, DEBUG 7d), job diário no GitHub
+Actions, métricas do próprio job por OTLP e alerta de teto no Grafana. Detalhes,
+configuração e runbook em [turso-retencao.md](turso-retencao.md).
+
+```bash
+make retention-dry   # o que sairia, por nível
+make retention       # aplica
+```

@@ -101,7 +101,8 @@ def current_trace_id() -> str | None:
     return format(context.trace_id, "032x")
 
 
-def _normalize_level(level: str) -> str:
+def normalize_level(level: str) -> str:
+    """Nível canônico (uppercase, aliases resolvidos). Usado também pela retenção (#9)."""
     upper = (level or "INFO").strip().upper()
     return _LEVEL_ALIASES.get(upper, upper)
 
@@ -199,7 +200,7 @@ class TursoLogWriter:
             app_name=app_name,
             tenant_id=tenant_id or None,
             trace_id=trace_id or current_trace_id(),
-            level=_normalize_level(level),
+            level=normalize_level(level),
             message=(message or "")[:MAX_MESSAGE_CHARS],
             metadata=_serialize_metadata(metadata),
         )

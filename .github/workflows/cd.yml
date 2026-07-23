@@ -47,7 +47,8 @@ jobs:
       - name: Smoke — entrypoints importam
         run: |
           docker run --rm ops-centro-receiver:ci python -c "\
-          import ops_centro.receiver.app, ops_centro.conventions; \
+          import ops_centro.receiver.app, ops_centro.conventions, ops_centro.metrics, \
+          ops_centro.turso.retention, ops_centro.grafana.dashboards; \
           print('imagem OK: entrypoints importam')"
 
       - name: Smoke — imagem roda como non-root

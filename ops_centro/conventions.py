@@ -74,6 +74,8 @@ METRIC_PREFIXES = {
 
 # Labels permitidas em métricas (cardinalidade baixa e enumerável). tenant_id é
 # permitido apenas em métricas de volume/uso; session_id/trace_id/file_id nunca.
+# `query_type` e `level` entraram na v1.1 (issue #11) — os dois são enumeráveis e
+# necessários para as métricas da §7 do serviço de memória e do job de retenção.
 ALLOWED_METRIC_LABELS = frozenset(
     {
         ATTR_APP_NAME,
@@ -84,6 +86,8 @@ ALLOWED_METRIC_LABELS = frozenset(
         "status",
         "agent",
         "model",
+        "query_type",
+        "level",
     }
 )
 

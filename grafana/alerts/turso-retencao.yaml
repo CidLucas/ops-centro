@@ -1,0 +1,159 @@
+# Alertas da retenção de logs no Turso — issue #9.
+#
+# Formato: provisionamento de Grafana Alerting (unified). Aplicar por
+# `provisioning/alerting/` num Grafana self-hosted, ou importar em
+# Alerting → Alert rules → Import (Grafana Cloud).
+#
+# As três regras cobrem os dois jeitos de a mitigação do risco §10 falhar:
+#   1. o banco cresce em direção ao teto do free tier (aviso em 70%);
+#   2. o banco passa de 90% do teto (crítico — retenção não está dando conta);
+#   3. o job de limpeza simplesmente parou de rodar (silêncio da métrica).
+#
+# As séries vêm do próprio job (`ops_centro.turso.retention`, métricas
+# `ops_centro_logs_*` do catálogo em ops_centro/metrics.py) — se a regra 3 disparar,
+# as regras 1 e 2 estão cegas e a investigação começa por ela.
+#
+# `${DS_PROM}` é o uid do datasource Prometheus/Mimir do stack (`grafanacloud-prom`
+# no Grafana Cloud). O roteamento para o Hermes/Telegram é a issue #12: até lá, as
+# regras notificam o contact point default.
+#
+# Teto: 9 GiB = 9663676416 bytes (free tier do Turso, docs/free-tier-baseline.md).
+# Se a cota do plano mudar, mude aqui e em TURSO_DB_SIZE_LIMIT_BYTES.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: ops-centro-turso
+    folder: Ops Centro
+    interval: 5m
+    rules:
+      # --------------------------------------------------------------
+      # 1. Banco de logs acima de 70% do teto do free tier
+      # --------------------------------------------------------------
+      - uid: ops-centro-turso-db-70
+        title: "Turso: banco de logs acima de 70% do free tier"
+        condition: B
+        for: 30m
+        noDataState: NoData # sem dado aqui é problema da regra 3, não desta
+        execErrState: Error
+        annotations:
+          summary: "Banco de logs do Turso em {{ printf \"%.0f\" $values.A.Value }}% do teto"
+          description: |
+            O banco `ops-centro-logs` passou de 70% dos 9 GiB do free tier.
+            Ações, na ordem: (1) conferir se o job de retenção rodou hoje
+            (`ops_centro_log_retention_deleted_total`); (2) encurtar a janela por nível
+            em TURSO_LOG_RETENTION_DAYS; (3) rodar `make retention-vacuum` uma vez para
+            devolver ao disco o espaço já liberado.
+          runbook_url: "https://github.com/CidLucas/ops-centro/blob/main/docs/turso-retencao.md"
+        labels:
+          severity: warning
+          app: ops-centro
+          component: turso
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600 # 6h: o job publica a métrica uma vez por dia
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * max(ops_centro_logs_db_bytes) / 9663676416
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [70]
+
+      # --------------------------------------------------------------
+      # 2. Banco de logs acima de 90% do teto — a retenção não está dando conta
+      # --------------------------------------------------------------
+      - uid: ops-centro-turso-db-90
+        title: "Turso: banco de logs acima de 90% do free tier"
+        condition: B
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: "Banco de logs do Turso em {{ printf \"%.0f\" $values.A.Value }}% do teto"
+          description: |
+            Passar dos 9 GiB tira o banco do free tier (RNF01: custo alvo R$ 0–50).
+            A janela de retenção vigente não está compensando o volume de escrita:
+            encurte-a **e** revise o que os apps mandam para o Turso — INFO em volume é
+            papel do Loki, não da retenção longa (docs/turso-logs.md → "O que logar").
+          runbook_url: "https://github.com/CidLucas/ops-centro/blob/main/docs/turso-retencao.md"
+        labels:
+          severity: critical
+          app: ops-centro
+          component: turso
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 21600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * max(ops_centro_logs_db_bytes) / 9663676416
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [90]
+
+      # --------------------------------------------------------------
+      # 3. Job de retenção sem execução — o alerta que vigia os outros dois
+      # --------------------------------------------------------------
+      - uid: ops-centro-retencao-parada
+        title: "Turso: job de retenção sem execução há 36h"
+        condition: B
+        for: 1h
+        noDataState: Alerting # aqui a ausência de dado É o sintoma
+        execErrState: Error
+        annotations:
+          summary: "O job de limpeza de logs não roda desde ontem"
+          description: |
+            Nenhuma amostra de `ops_centro_log_retention_duration_seconds` nas últimas
+            36h — o workflow `.github/workflows/retention.yml` (cron diário) falhou, foi
+            desabilitado, ou o secret TURSO_DATABASE_URL sumiu. Sem ele o banco cresce
+            sem limite e os alertas de tamanho ficam olhando para uma série congelada.
+          runbook_url: "https://github.com/CidLucas/ops-centro/blob/main/docs/turso-retencao.md"
+        labels:
+          severity: warning
+          app: ops-centro
+          component: turso
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 129600 # 36h
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: sum(increase(ops_centro_log_retention_duration_seconds_count[36h])) or vector(0)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]

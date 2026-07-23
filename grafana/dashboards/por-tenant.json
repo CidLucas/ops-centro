@@ -1,0 +1,458 @@
+{
+  "uid": "ops-centro-por-tenant",
+  "title": "Ops Centro — Por tenant",
+  "description": "Volume e erro por `tenant_id`, cruzando Agents Platform e File Memory (RNF05). O mesmo filtro vale para os dois apps porque o schema comum é o mesmo (issue #3).",
+  "tags": [
+    "ops-centro",
+    "as-code"
+  ],
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "DS_PROM",
+        "label": "Datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "hide": 0,
+        "regex": "",
+        "current": {}
+      },
+      {
+        "type": "query",
+        "name": "environment",
+        "label": "Ambiente",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROM}"
+        },
+        "definition": "label_values(environment)",
+        "query": "label_values(environment)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "sort": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "type": "query",
+        "name": "tenant_id",
+        "label": "Tenant",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROM}"
+        },
+        "definition": "label_values(agents_platform_tenant_executions_total, tenant_id)",
+        "query": "label_values(agents_platform_tenant_executions_total, tenant_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "sort": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "title": "Ops Centro",
+      "tags": [
+        "ops-centro",
+        "as-code"
+      ],
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Volume por tenant",
+      "id": 1,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Execuções de agente por tenant",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (tenant_id) (rate(agents_platform_tenant_executions_total{environment=~\"$environment\", tenant_id=~\"$tenant_id\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Arquivos processados por tenant",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (tenant_id) (rate(context_mcp_tenant_files_total{environment=~\"$environment\", tenant_id=~\"$tenant_id\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      }
+    },
+    {
+      "type": "row",
+      "title": "Erros por tenant",
+      "id": 4,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Erro em execuções de agente (%)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "100 * sum by (tenant_id) (rate(agents_platform_tenant_executions_total{environment=~\"$environment\", status=\"error\", tenant_id=~\"$tenant_id\"}[$__rate_interval])) / clamp_min(sum by (tenant_id) (rate(agents_platform_tenant_executions_total{environment=~\"$environment\", tenant_id=~\"$tenant_id\"}[$__rate_interval])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Erro no processamento de arquivos (%)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "100 * sum by (tenant_id) (rate(context_mcp_tenant_files_total{environment=~\"$environment\", status=\"error\", tenant_id=~\"$tenant_id\"}[$__rate_interval])) / clamp_min(sum by (tenant_id) (rate(context_mcp_tenant_files_total{environment=~\"$environment\", tenant_id=~\"$tenant_id\"}[$__rate_interval])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      }
+    },
+    {
+      "type": "row",
+      "title": "Totais da janela",
+      "id": 7,
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "table",
+      "title": "Execuções por tenant (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (tenant_id, status) (increase(agents_platform_tenant_executions_total{environment=~\"$environment\", tenant_id=~\"$tenant_id\"}[$__range]))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            }
+          }
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      }
+    },
+    {
+      "type": "table",
+      "title": "Arquivos por tenant (janela)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (tenant_id, status) (increase(context_mcp_tenant_files_total{environment=~\"$environment\", tenant_id=~\"$tenant_id\"}[$__range]))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            }
+          }
+        }
+      ],
+      "id": 9,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      }
+    }
+  ],
+  "version": 0
+}

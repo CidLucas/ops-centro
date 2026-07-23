@@ -66,3 +66,33 @@ def test_webhook_payload_invalido(client, monkeypatch):
         "/alerts/grafana", json={"sem": "status"}, headers={"X-Alert-Token": "segredo"}
     )
     assert resp.status_code == 422
+
+
+def test_webhook_conta_a_metrica_do_proprio_receiver(client, monkeypatch):
+    """`ops_centro_alerts_received_total` do catálogo da §7 — o observador também é
+    observado. `firing` conta como `error` no vocabulário congelado do schema."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from ops_centro.receiver import app as receiver
+
+    leitor = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[leitor])
+    monkeypatch.setattr(receiver, "_alerts_counter", None)
+    monkeypatch.setattr(
+        "opentelemetry.metrics.get_meter", lambda *a, **k: provider.get_meter("teste")
+    )
+    monkeypatch.setenv("ALERT_WEBHOOK_TOKEN", "segredo")
+
+    resp = client.post("/alerts/grafana", json=PAYLOAD, headers={"X-Alert-Token": "segredo"})
+    assert resp.status_code == 202
+
+    pontos = [
+        ponto
+        for recurso in leitor.get_metrics_data().resource_metrics
+        for escopo in recurso.scope_metrics
+        for metrica in escopo.metrics
+        if metrica.name == "ops_centro_alerts_received_total"
+        for ponto in metrica.data.data_points
+    ]
+    assert [(p.value, p.attributes["status"]) for p in pontos] == [(1, "error")]
