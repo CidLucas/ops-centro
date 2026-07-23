@@ -58,7 +58,7 @@ wheels = [
 [[package]]
 name = "blu-observability-bootstrap"
 version = "0.3.0"
-source = { git = "https://github.com/CidLucas/repo_platform.git?subdirectory=libs%2Fblu_observability_bootstrap&rev=5bd5076e557458aa12fa54e257de463cd407f736#5bd5076e557458aa12fa54e257de463cd407f736" }
+source = { git = "https://github.com/CidLucas/repo_platform.git?subdirectory=libs%2Fblu_observability_bootstrap&rev=3260e957d7caa4b1852a8f9de76f4b4b00f47235#3260e957d7caa4b1852a8f9de76f4b4b00f47235" }
 dependencies = [
     { name = "fastapi" },
     { name = "langchain-core" },
@@ -615,7 +615,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "blu-observability-bootstrap", git = "https://github.com/CidLucas/repo_platform.git?subdirectory=libs%2Fblu_observability_bootstrap&rev=5bd5076e557458aa12fa54e257de463cd407f736" },
+    { name = "blu-observability-bootstrap", git = "https://github.com/CidLucas/repo_platform.git?subdirectory=libs%2Fblu_observability_bootstrap&rev=3260e957d7caa4b1852a8f9de76f4b4b00f47235" },
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "libsql", specifier = ">=0.1.0" },
