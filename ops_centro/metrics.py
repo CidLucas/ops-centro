@@ -312,6 +312,39 @@ CATALOG: tuple[Metric, ...] = (
         status=EMITTING,
     ),
     Metric(
+        name="ops_centro_hermes_notifications_total",
+        app=APP_OPS_CENTRO,
+        kind=COUNTER,
+        unit="1",
+        labels=("status",),
+        item=ITEM_SELF,
+        description="Notificações entregues ao Hermes, por desfecho (RF07 — parte 2, issue #15). "
+        "`error` = esgotou o retry e a notificação foi para o dead-letter no Turso.",
+        status=EMITTING,
+    ),
+    Metric(
+        name="ops_centro_hermes_delivery_duration_seconds",
+        app=APP_OPS_CENTRO,
+        kind=HISTOGRAM,
+        unit="s",
+        labels=(),
+        item=ITEM_SELF,
+        description="Duração da entrega ao Hermes, retries inclusos — é a fatia do critério "
+        "'alerta no Telegram em menos de 1 min' (§12) que este repo controla.",
+        status=EMITTING,
+    ),
+    Metric(
+        name="ops_centro_autonomous_actions_total",
+        app=APP_OPS_CENTRO,
+        kind=COUNTER,
+        unit="1",
+        labels=("status",),
+        item=ITEM_SELF,
+        description="Ações autônomas do receiver, por desfecho (RF09, issue #17). "
+        "`bloqueado` = kill switch, cooldown ou ausência de endpoint admin — não é falha.",
+        status=EMITTING,
+    ),
+    Metric(
         name="ops_centro_log_retention_deleted_total",
         app=APP_OPS_CENTRO,
         kind=COUNTER,
