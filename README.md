@@ -24,7 +24,10 @@ apps ──OTLP──▶ Grafana Cloud (Prom + Loki + Tempo, free tier)
 | Convenções de telemetria | [`ops_centro/conventions.py`](ops_centro/conventions.py) | Schema comum (RF02/RNF05): `app_name`, `environment`, `tenant_id`, `version` + nomes canônicos de spans |
 | Catálogo de métricas | [`ops_centro/metrics.py`](ops_centro/metrics.py) | As métricas prioritárias da §7 com tipo, unidade e labels fechadas — gera os painéis e é conferível contra o Prometheus ([docs](docs/metricas-prioritarias.md)) |
 | Receiver de alertas | [`ops_centro/receiver/`](ops_centro/receiver/) | FastAPI que recebe o webhook do Grafana e enriquece com o contexto do Turso — trace, logs correlacionados e links prontos ([docs](docs/alertas.md)) |
-| Migrations Turso | [`db/migrations/`](db/migrations/) | Tabela `logs` de longa retenção correlacionada por `trace_id` (RF05) |
+| Canal do Hermes | [`ops_centro/receiver/hermes.py`](ops_centro/receiver/hermes.py) | Contrato receiver→Hermes: mensagem em MarkdownV2, retry com backoff, rate limit e dead-letter no Turso ([docs](docs/hermes.md)) |
+| Consultas sob demanda | [`ops_centro/receiver/status.py`](ops_centro/receiver/status.py) | `/status`, `/status <tenant>` e `/erros` respondidos com queries agregadas do Mimir + Turso (RF08, [docs](docs/hermes.md#2-consultas-sob-demanda-16)) |
+| Ações autônomas | [`ops_centro/receiver/actions.py`](ops_centro/receiver/actions.py) | Pausa de tool com falha recorrente: evidência no Turso, TTL com despausa automática, kill switch e auditoria ([docs](docs/acoes-autonomas.md)) |
+| Migrations Turso | [`db/migrations/`](db/migrations/) | Tabela `logs` de longa retenção correlacionada por `trace_id` (RF05), dead-letter do Hermes e audit das ações |
 | Writer de logs | [`ops_centro/turso/`](ops_centro/turso/) | `log_to_turso(...)` em batch numa thread daemon (RNF04) + aplicador de migrations — ver [docs/turso-logs.md](docs/turso-logs.md) |
 | Retenção dos logs | [`ops_centro/turso/retention.py`](ops_centro/turso/retention.py) | Janela por nível + job diário de limpeza, com métricas próprias e alerta de teto do free tier ([docs](docs/turso-retencao.md)) |
 | Dashboards as-code | [`ops_centro/grafana/`](ops_centro/grafana/) → [`grafana/dashboards/`](grafana/dashboards/) | Quatro dashboards gerados a partir do catálogo e publicados por API de forma idempotente ([docs](docs/dashboards.md)) |
@@ -63,7 +66,17 @@ Fase 3 — alertas, enriquecimento e deploy:
 make alerts           # (re)gera grafana/alerts/*.yaml (docs/alertas.md)
 make alerts-list      # regras e limiares em uma tabela
 make alerts-apply     # publica regras, contact point e roteamento no Grafana Cloud
+make hermes-sample    # envelope receiver→Hermes de exemplo (docs/hermes.md)
+make hermes-send      # notificação sintética no Telegram — teste ponta a ponta
+make status           # responde '/status' localmente, como o Hermes veria
 cd deploy && ./env-from-ssm.sh && ./deploy.sh --proxy   # na EC2 (docs/deploy.md)
+```
+
+Fase 4 — ações automatizadas:
+
+```bash
+make actions-status   # kill switch, pausas vencidas e últimas ações (docs/acoes-autonomas.md)
+make actions-sweep    # despausa agora o que já venceu o TTL
 ```
 
 ## CI/CD

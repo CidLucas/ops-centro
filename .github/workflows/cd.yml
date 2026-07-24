@@ -72,8 +72,9 @@ jobs:
         run: |
           docker run --rm ${{ steps.img.outputs.name }}:sha-${{ github.sha }} python -c "\
           import ops_centro.receiver.app, ops_centro.conventions, ops_centro.metrics, \
-          ops_centro.turso.retention, ops_centro.grafana.dashboards, \
-          ops_centro.grafana.alerts, ops_centro.receiver.enrichment; \
+          ops_centro.turso.retention, ops_centro.turso.audit, ops_centro.grafana.dashboards, \
+          ops_centro.grafana.alerts, ops_centro.receiver.enrichment, \
+          ops_centro.receiver.hermes, ops_centro.receiver.status, ops_centro.receiver.actions; \
           print('imagem OK: entrypoints importam')"
 
       - name: Smoke — imagem roda como non-root
