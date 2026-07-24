@@ -60,6 +60,18 @@ def test_webhook_aceito(client, monkeypatch):
     assert resp.json()["result"] == "accepted"
 
 
+def test_webhook_reporta_a_entrega_ao_hermes(client, monkeypatch):
+    """Sem Hermes configurado o webhook segue respondendo 202 — e diz que não enviou
+    (issue #15: o estado do canal é observável na própria resposta)."""
+    monkeypatch.setenv("ALERT_WEBHOOK_TOKEN", "segredo")
+    monkeypatch.delenv("HERMES_WEBHOOK_URL", raising=False)
+    resp = client.post("/alerts/grafana", json=PAYLOAD, headers={"X-Alert-Token": "segredo"})
+    assert resp.status_code == 202
+    corpo = resp.json()
+    assert corpo["delivery"]["status"] == "desativado"
+    assert corpo["actions"] == []  # alerta sem label `tool` não dispara ação (#17)
+
+
 def test_webhook_payload_invalido(client, monkeypatch):
     monkeypatch.setenv("ALERT_WEBHOOK_TOKEN", "segredo")
     resp = client.post(

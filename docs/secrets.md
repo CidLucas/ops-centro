@@ -67,7 +67,16 @@ o contact point sem commitar o token.
 | `ALERT_WEBHOOK_TOKEN` | Receiver (valida `X-Alert-Token` ou `Authorization: Bearer`) e contact point do Grafana | SSM `/ops-centro/prod/` → `.env` da EC2 + `--apply` do contact point (issue #12) |
 | `ALERT_ENRICHMENT_TIMEOUT` | Receiver (deadline da consulta ao Turso, default 2s) | `.env` EC2 — não é segredo |
 | `GRAFANA_TEMPO_DS_UID` | Receiver (link do trace na mensagem enriquecida) | `.env` EC2 (default `grafanacloud-traces`) |
-| `HERMES_WEBHOOK_URL` | Receiver → Hermes | `.env` EC2 (fase 3) |
+| `GRAFANA_READ_TOKEN` + `GRAFANA_STACK_URL` | Receiver (consultas `/status` do #16 no Mimir) | `.env` EC2 — o token de **leitura**, não o de escrita |
+| `HERMES_WEBHOOK_URL` | Receiver → Hermes (issue #15) | `.env` EC2 — não é segredo |
+| `HERMES_WEBHOOK_TOKEN` | Receiver → Hermes (`X-Hermes-Token` + `Authorization: Bearer`) | SSM `/ops-centro/prod/` → `.env` da EC2; o mesmo valor no Hermes |
+| `HERMES_RETRIES` / `HERMES_BACKOFF` / `HERMES_TIMEOUT` | Entrega ao Hermes (defaults 3 / 0,5s / 5s) | `.env` EC2 — não é segredo |
+| `HERMES_RATE_LIMIT` / `HERMES_RATE_WINDOW` | Rate limit anti-tempestade (defaults 10 / 60s) | idem |
+| `STATUS_QUERY_TIMEOUT` | Consultas sob demanda (default 8s, issue #16) | idem |
+| `AUTONOMOUS_ACTIONS` | Kill switch das ações autônomas (issue #17) | `.env` EC2 — não é segredo, mas é a alavanca de emergência |
+| `AUTONOMOUS_PAUSE_THRESHOLD` / `_WINDOW_MINUTES` / `_TTL_SECONDS` | Regra de decisão da pausa (defaults 5 / 30min / 900s) | idem |
+| `ADMIN_API_AGENTS_PLATFORM_URL` / `ADMIN_API_FILE_MEMORY_URL` | Endpoint admin de pause/resume de tool nos apps | `.env` EC2 — não é segredo |
+| `ADMIN_API_TOKEN` | Auth do receiver no `admin_api` dos apps | SSM `/ops-centro/prod/` → `.env` da EC2; o mesmo valor nos apps |
 
 Na EC2 nenhum destes é digitado à mão: `deploy/env-from-ssm.sh` monta o `.env` (modo 600) a
 partir do **AWS SSM Parameter Store** (`/ops-centro/prod/*`, os segredos como

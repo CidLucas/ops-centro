@@ -77,6 +77,26 @@ alerts-list: ## Lista as regras e seus limiares
 alerts-apply: ## Publica regras, contact point e roteamento no Grafana Cloud
 	uv run python -m ops_centro.grafana.alerts --apply
 
+# ------------------------------------------------------- hermes / ações -----
+.PHONY: hermes-sample hermes-send status erros actions-status actions-sweep
+hermes-sample: ## Imprime o envelope receiver→Hermes de exemplo (issue #15)
+	uv run python -m ops_centro.receiver.hermes --sample
+
+hermes-send: ## Envia a notificação sintética ao HERMES_WEBHOOK_URL (teste ponta a ponta)
+	uv run python -m ops_centro.receiver.hermes --send
+
+status: ## Responde '/status' localmente, como o Hermes veria (issue #16)
+	uv run python -m ops_centro.receiver.status "/status"
+
+erros: ## Responde '/erros hoje' localmente
+	uv run python -m ops_centro.receiver.status "/erros hoje"
+
+actions-status: ## Últimas ações autônomas e pausas vencidas (issue #17)
+	uv run python -m ops_centro.receiver.actions --status
+
+actions-sweep: ## Despausa agora tudo que já venceu o TTL
+	uv run python -m ops_centro.receiver.actions --sweep
+
 # ---------------------------------------------------------- validação -------
 .PHONY: validate validate-json
 validate: ## Checklist de sinais no Grafana Cloud (issue #6)

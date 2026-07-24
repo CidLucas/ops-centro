@@ -2,7 +2,9 @@
 
 > Gerador: [`ops_centro/grafana/alerts.py`](../ops_centro/grafana/alerts.py) ·
 > YAMLs: [`grafana/alerts/`](../grafana/alerts/) ·
-> enriquecimento: [`ops_centro/receiver/enrichment.py`](../ops_centro/receiver/enrichment.py).
+> enriquecimento: [`ops_centro/receiver/enrichment.py`](../ops_centro/receiver/enrichment.py) ·
+> o que acontece depois: [hermes.md](hermes.md) (envio, #15) e
+> [acoes-autonomas.md](acoes-autonomas.md) (pausa de tool, #17).
 
 Este é o runbook apontado por `runbook_url` em toda regra: se você chegou aqui por um
 alerta, comece pela §5.
@@ -15,6 +17,8 @@ métrica no Mimir ──limiar──▶ alert rule (§1) ──notification poli
                                           receiver /alerts/grafana ◀──────────────┘
                                                    │
                               enriquece no Turso por trace_id (§4) ──▶ Hermes → Telegram (#15)
+                                                   │
+                                       ação autônoma de baixo risco (#17)
 ```
 
 ## 1. As regras
@@ -106,7 +110,9 @@ O receiver não repassa o alerta cru. Para cada alerta (até 5 por webhook) ele:
 3. monta o payload com resumo, logs, link do trace no Tempo e link do dashboard do app já
    filtrado pelo ambiente.
 
-O corpo da resposta do webhook é esse payload — é o que o envio ao Telegram (#15) consome.
+O corpo da resposta do webhook é esse payload, e é dele que sai o envelope entregue ao
+Hermes ([hermes.md §1](hermes.md#1-contrato-receiverhermes-15)) — com retry, rate limit e
+dead-letter no Turso quando o Hermes não responde.
 
 **O enriquecimento nunca segura o alerta.** A consulta roda com deadline
 (`ALERT_ENRICHMENT_TIMEOUT`, default 2s) numa thread; timeout, Turso fora do ar ou

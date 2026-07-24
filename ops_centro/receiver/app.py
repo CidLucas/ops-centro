@@ -1,12 +1,16 @@
-"""Receiver de alertas do Grafana (RF06/RF07).
+"""Receiver de alertas do Grafana e canal do Hermes (RF06/RF07/RF08/RF09).
 
-Fluxo: Grafana Cloud dispara webhook → este serviço valida o token, consulta contexto
-adicional no Turso (correlação por trace_id, `receiver/enrichment.py`) e devolve a
-mensagem enriquecida, que o envio ao Hermes/Telegram consome (issue #15).
+Fluxo do alerta: Grafana Cloud dispara webhook → este serviço valida o token, consulta
+contexto adicional no Turso (correlação por trace_id, `receiver/enrichment.py`), entrega a
+notificação ao Hermes (`receiver/hermes.py`, issue #15) e, se a evidência justificar, toma
+a ação autônoma da RF09 (`receiver/actions.py`, issue #17).
 
-Estado atual: auth por token compartilhado + enriquecimento (issue #14). O repasse ao
-Hermes é a issue #15 — hoje o payload enriquecido sai no log estruturado e no corpo da
-resposta, que é o que o teste de ponta a ponta consegue verificar.
+O caminho inverso também passa por aqui: `POST /hermes/consulta` responde as perguntas de
+status vindas do Telegram (`receiver/status.py`, RF08 / issue #16).
+
+Os dois endpoints usam o **mesmo padrão de auth**: token compartilhado em `X-Alert-Token`
+ou `Authorization: Bearer`, comparado com `secrets.compare_digest`, falhando fechado quando
+não há token configurado.
 """
 
 from __future__ import annotations
@@ -24,7 +28,10 @@ from pydantic import BaseModel, Field
 from ops_centro import __version__
 from ops_centro.conventions import APP_OPS_CENTRO, build_resource_attributes
 from ops_centro.metrics import common_labels
+from ops_centro.receiver import actions
 from ops_centro.receiver.enrichment import enrich_alerts, summarize
+from ops_centro.receiver.hermes import notify_alerts
+from ops_centro.receiver.status import run_command
 from ops_centro.turso import shutdown_log_writer
 
 logger = logging.getLogger(__name__)
@@ -47,8 +54,18 @@ class GrafanaWebhookPayload(BaseModel):
     alerts: list[GrafanaAlert] = Field(default_factory=list)
 
 
+class ConsultaPayload(BaseModel):
+    """Consulta sob demanda vinda do Hermes (RF08, issue #16): o texto cru do Telegram."""
+
+    command: str = ""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Pausa cujo TTL venceu enquanto o receiver estava fora precisa ser desfeita ao voltar:
+    # o estado mora no Turso (issue #17), então um restart não deixa tool pausada para
+    # sempre. Sem Turso configurado, é no-op.
+    await actions.sweep_expired()
     yield
     # Drena o writer de logs (RF05) antes de derrubar a telemetria: o que estiver
     # na fila ainda precisa do trace correspondente exportado.
@@ -129,25 +146,28 @@ def _presented_token(x_alert_token: str | None, authorization: str | None) -> st
     return None
 
 
+def _require_token(x_alert_token: str | None, authorization: str | None) -> None:
+    """Auth compartilhada pelos endpoints do Hermes (RNF06: token vem de env var).
+
+    Sem token configurado o endpoint é inoperante de propósito: falhar fechado evita
+    aceitar chamada não autenticada em produção.
+    """
+    expected = _expected_token()
+    if expected is None:
+        raise HTTPException(status_code=503, detail="ALERT_WEBHOOK_TOKEN não configurado")
+    apresentado = _presented_token(x_alert_token, authorization)
+    if not apresentado or not secrets.compare_digest(apresentado, expected):
+        raise HTTPException(status_code=401, detail="token inválido")
+
+
 @app.post("/alerts/grafana", status_code=status.HTTP_202_ACCEPTED)
 async def receive_grafana_alert(
     payload: GrafanaWebhookPayload,
     x_alert_token: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Recebe o webhook do Grafana Alerting, enriquece e devolve (RF06/RF07).
-
-    Auth: token compartilhado, configurado também no contact point do Grafana
-    (RNF06: token vem de env var, nunca de código).
-    """
-    expected = _expected_token()
-    if expected is None:
-        # Sem token configurado o endpoint é inoperante de propósito: falhar
-        # fechado evita aceitar webhook não autenticado em produção.
-        raise HTTPException(status_code=503, detail="ALERT_WEBHOOK_TOKEN não configurado")
-    apresentado = _presented_token(x_alert_token, authorization)
-    if not apresentado or not secrets.compare_digest(apresentado, expected):
-        raise HTTPException(status_code=401, detail="token inválido")
+    """Recebe o webhook do Grafana Alerting, enriquece, notifica e age (RF06/RF07/RF09)."""
+    _require_token(x_alert_token, authorization)
 
     logger.info(
         "alerta recebido do Grafana",
@@ -161,5 +181,42 @@ async def receive_grafana_alert(
     resumo = summarize(enriquecidos)
     logger.info("alerta enriquecido", extra=resumo)
 
-    # TODO(#15): repassar `alerts` ao Hermes, que formata e manda no Telegram.
-    return {"result": "accepted", **resumo, "alerts_detail": [e.as_dict() for e in enriquecidos]}
+    # Entrega ao Hermes → Telegram (issue #15). Tem retry, rate limit e dead-letter
+    # próprios e nunca levanta: alerta não entregue vira registro, não erro no webhook.
+    entrega = await notify_alerts(enriquecidos)
+
+    # Ação autônoma de baixo risco (RF09, issue #17): só age com evidência confirmada no
+    # Turso e com o kill switch desligado. Também nunca levanta.
+    executadas = await actions.handle_alerts(enriquecidos)
+    # Pausa vencida é desfeita aqui além do start: o webhook é o batimento mais frequente
+    # que este serviço tem, e depender só do restart deixaria TTL vencido em aberto.
+    await actions.sweep_expired()
+
+    return {
+        "result": "accepted",
+        **resumo,
+        "delivery": entrega.as_dict(),
+        "actions": executadas,
+        "alerts_detail": [e.as_dict() for e in enriquecidos],
+    }
+
+
+@app.post("/hermes/consulta")
+async def hermes_consulta(
+    payload: ConsultaPayload,
+    x_alert_token: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Responde uma consulta sob demanda do Telegram (RF08, issue #16).
+
+    Corpo: `{"command": "/status acme"}`. A resposta traz `text` já em MarkdownV2 (o
+    Hermes só repassa) e `data` estruturado. Comando desconhecido vira `/ajuda` com 200 —
+    quem digitou errado no Telegram quer a lista de comandos, não um código de erro.
+    """
+    _require_token(x_alert_token, authorization)
+    resposta = await run_command(payload.command)
+    logger.info(
+        "consulta respondida",
+        extra={"comando": resposta["command"], "bruto": payload.command[:120]},
+    )
+    return resposta
