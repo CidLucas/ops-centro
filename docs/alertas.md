@@ -70,12 +70,13 @@ que eles podem ser commitados e ainda assim usados como provisionamento por arqu
 > `--apply` substitui a **árvore de roteamento do org** (o Grafana só tem uma). Num stack
 > com roteamento pré-existente, use `--skip-policy` e faça a mudança de roteamento na mão.
 
-> **Estado (2026-07-23):** as 17 expressões foram rodadas contra o stack
-> `radiantfennec1578` como query instantânea — todas válidas, e as do free tier já
-> devolvem série (as métricas de uso existem com os nomes usados aqui). A **publicação**
-> ainda não foi feita: o contact point precisa da URL pública do receiver, que depende do
-> deploy na EC2 ([#13](deploy.md)). Ordem certa: deploy → `RECEIVER_WEBHOOK_URL` no `.env`
-> → `make alerts-apply` → *Test* no contact point.
+> **Estado (2026-07-24):** publicado no stack `radiantfennec1578` — 17 regras nos três
+> grupos, contact point `ops-centro-hermes` apontando para
+> `https://lucascid.duckdns.org/alerts/grafana` e a notification policy agrupando por
+> `app_name` + `tenant_id`. A segunda aplicação devolveu as mesmas 17 regras (idempotência
+> verificada em produção, não só em teste). Um webhook autenticado pelo caminho público
+> voltou `202` com o log correlacionado do Turso e os links de trace e dashboard; sem token
+> e com token errado, `401`.
 
 ## 3. Roteamento
 

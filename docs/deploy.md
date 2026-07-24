@@ -8,6 +8,13 @@ O receiver mora na mesma EC2 do Hermes — custo já assumido (§11 do plano), e
 Hermes está para receber o alerta enriquecido (#15). Este documento é o caminho completo,
 do zero ao webhook de produção chegando com 202.
 
+> **Estado (2026-07-24):** no ar em `https://lucascid.duckdns.org` (EC2 `i-03d30b2ac8e6f9c53`,
+> us-east-1, IP elástico `100.31.234.219`). `/healthz` responde por HTTPS com certificado
+> válido; `/`, `/.env`, `/docs` e `/openapi.json` devolvem 404 — só as duas rotas do
+> contrato são públicas. O `.env` foi montado a partir do `.env` local em vez do SSM,
+> porque a credencial AWS disponível não tinha `iam:PutRolePolicy` para conceder leitura do
+> Parameter Store à role; migrar para o SSM (§3) quando houver identidade de admin.
+
 ## 1. Decisão de entrega: GHCR, não build na EC2
 
 O CD builda a imagem no runner, roda o smoke (entrypoints importam, roda non-root,
@@ -203,6 +210,10 @@ container (DNS, TLS, security group, proxy); as métricas mostram degradação s
 
 | Sintoma | Causa provável |
 | --- | --- |
+| ACME falha com `Timeout during connect (likely firewall problem)`, mas o **seu** `curl` conecta | security group liberando 80/443 só para o seu IP — é o efeito de escolher *"My IP"* no console. O Let's Encrypt valida a partir dos servidores dele, não do seu. Troque o source para `0.0.0.0/0`. Sintoma no log do Caddy: o access log só mostra requisições vindas do seu IP |
+| `docker login ghcr.io` com `permission_denied: does not match expected scopes` | PAT **fine-grained** (`github_pat_`) não autentica no GHCR; use um **classic** (`ghp_`) com `read:packages` |
+| `docker: 'compose' is not a docker command` | plugin do Compose v2 ausente — instalar (§2) |
+| `env-from-ssm.sh` com `AccessDeniedException` | a role da EC2 não tem a policy de leitura do SSM (§3). Sem credencial de admin para concedê-la, gere o `.env` fora e copie-o para `deploy/.env` (modo 600) |
 | `pull` com `denied` | pacote privado no GHCR e sem `docker login` na EC2 (§1) |
 | `/healthz` local ok, público não | 443 fechada no security group, DNS não propagado, ou Caddy sem a porta 80 para o ACME |
 | Webhook responde 503 | `ALERT_WEBHOOK_TOKEN` ausente no `.env` — falha fechada de propósito |
