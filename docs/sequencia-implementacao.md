@@ -22,14 +22,19 @@ fora EC2    │        └─────────► #27 dead-man's switch (
 
 ## Fase A — Resiliência do observador (urgente, pós-incidente 05/08)
 
-### A1. #26 — Métricas de host da EC2 (memória, swap, disco, load) — ✅ implementada (05/08)
+### A1. #26 — Métricas de host da EC2 (memória, swap, disco, load) — ✅ implementada e verificada (05/08)
 **Status:** Alloy v1.18.0 no compose de produção (`deploy/alloy/config.alloy`), collectors
-cpu/filesystem/loadavg/meminfo/swap/systemd/time/uname, export via OTLP reusando o
-endpoint do `.env`. **Pendências:** (a) confirmação visual das séries `node_*` no
-Grafana Cloud (falta `GRAFANA_READ_TOKEN` na EC2 — criar service account `glsa_`
-Viewer); (b) o SSM precisa receber o token novo (`writer-ops-write`) com espaço
-literal + a var `OTEL_EXPORTER_OTLP_AUTH` — o `.env` da EC2 já está corrigido à mão,
-mas `env-from-ssm.sh` sobrescreve na próxima execução.
+cpu/filesystem/loadavg/meminfo/swap/systemd/time/uname, export via OTLP. **Séries
+confirmadas no Mimir** via `GRAFANA_READ_TOKEN` (glsa_ Viewer): `node_memory_*`,
+`node_load1`, `node_time_seconds`, `node_systemd_units` com **`job="integrations/unix"`**
+(o job vem dos targets do exporter.unix — padrão da integração Unix do Grafana Cloud;
+`job_name` do scrape NÃO sobrescreve). **Pendência:** o SSM — o `.env` foi corrigido à
+mão (token novo `writer-ops-write` + espaço literal + `GRAFANA_READ_TOKEN`), mas
+`/ops-centro/prod/*` não foi localizado em nenhuma região da conta 655177116015; o fluxo
+real é `.env` local (Mac) → scp para a EC2. **Descoberta para o #28:** o node_exporter
+embutido no Alloy v1.18 NÃO expõe `node_systemd_unit_restarts_total` (só 8 métricas
+systemd) — o alerta de loop de restart precisa de abordagem alternativa
+(ex: `node_systemd_unit_state{name="...",state="activating"}` persistente).
 
 - **O quê:** Alloy (Grafana Alloy) em container no compose de produção, com integração
   `prometheus.exporter.unix` (node_exporter embutido) + `prometheus.remote_write` para o

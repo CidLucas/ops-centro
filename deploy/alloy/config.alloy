@@ -28,10 +28,12 @@ prometheus.exporter.unix "host" {
   ]
 }
 
-// O exporter.unix só expõe targets; quem coleta é o scrape.
+// O exporter.unix só expõe targets; quem coleta é o scrape. O label job vem dos
+// targets do exporter.unix ("integrations/unix" — padrão da integração Unix do
+// Grafana Cloud, com dashboards oficiais). job_name do scrape NÃO sobrescreve.
 prometheus.scrape "host" {
-  targets    = prometheus.exporter.unix.host.targets
-  forward_to = [otelcol.receiver.prometheus.host.receiver]
+  targets         = prometheus.exporter.unix.host.targets
+  forward_to      = [otelcol.receiver.prometheus.host.receiver]
   scrape_interval = "30s"
 }
 
