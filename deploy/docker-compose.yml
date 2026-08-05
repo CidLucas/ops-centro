@@ -32,6 +32,34 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Métricas de host da EC2 (issue #26): node_exporter embutido no Alloy, enviando
+  # via OTLP para o Grafana Cloud com as MESMAS credenciais do receiver (.env).
+  # network_mode: host de propósito — os collectors leem /proc, /sys e o systemd do
+  # próprio host; a UI de debug do Alloy fica só no loopback (127.0.0.1:12345).
+  alloy:
+    image: grafana/alloy:v1.18.0
+    container_name: ops-centro-alloy
+    restart: unless-stopped
+    env_file: .env
+    network_mode: host
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --stability.level=public-preview
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /proc:/proc:ro
+      - /sys:/sys:ro
+      - /:/rootfs:ro # filesystem collector lê o rootfs do host
+      - /etc/hostname:/etc/hostname:ro
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro # systemd collector
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # `--profile proxy` sobe o Caddy (HTTPS automático via Let's Encrypt). Se o Hermes já
   # tem nginx/caddy na máquina, não use o profile: aponte o proxy existente para
   # 127.0.0.1:8080 e o resto do arquivo continua valendo.

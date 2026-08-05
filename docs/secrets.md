@@ -6,12 +6,13 @@ Nenhum valor vive em código — só nomes e onde cada um é usado. Valores fica
 ## Grafana Cloud
 
 Stack: `stack-1733152-otel-dev` · org `1853471` · região `prod-sa-east-1` (São Paulo).
-Gateway OTLP: `https://otlp-gateway-prod-sa-east-1.grafana.net/otlp` (auth Basic `1733152:<token glc_...>`).
+Gateway OTLP: `https://otlp-gateway-prod-sa-east-1.grafana.net/otlp` (auth Basic `1733152:<token glc_...>` — o `1733152` é o ID do gateway, NÃO o org id do payload do token).
 
 | Variável | Formato | Quem usa | Onde está |
 | --- | --- | --- | --- |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | URL do gateway OTLP | `blu_observability_bootstrap` nos 3 apps | Secrets de `ops-centro`, `mcp_brain`, `repo_platform` + `.env` local/EC2 |
-| `OTEL_EXPORTER_OTLP_HEADERS` | `Authorization=Basic%20<base64(1733152:token)>` (URL-encoded) | idem | idem |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `Authorization=Basic <base64(1733152:token)>` — **com espaço literal, NUNCA URL-encoded** (`%20` quebra o Alloy, que não decodifica; o SDK Python decodifica sozinho) | idem | idem |
+| `OTEL_EXPORTER_OTLP_AUTH` | **Só o valor** `Basic <base64(1733152:token)>` (sem o prefixo `Authorization=`), para o Alloy — o Alloy usa o valor do env como header HTTP inteiro, não faz parse de `k=v` | Alloy no compose (`deploy/alloy/config.alloy`) | `.env` da EC2 |
 
 Rotação: gerar novo token em Grafana Cloud → Access Policies, atualizar os
 secrets nos 3 repos (`gh secret set`) e os `.env` locais/EC2. O token atual é de

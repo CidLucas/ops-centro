@@ -1,0 +1,58 @@
+// config.alloy — Métricas de host da EC2 (issue #26).
+//
+// Coleta métricas do host (node_exporter embutido) e envia para o Grafana Cloud
+// via OTLP, REUSANDO o endpoint e o header de autorização do .env (os mesmos do
+// receiver). Zero secrets novos: nada além de OTEL_EXPORTER_OTLP_ENDPOINT e
+// OTEL_EXPORTER_OTLP_HEADERS, que o env_file do compose já injeta.
+//
+// Séries de interesse (alimentam os alertas #27 e #28):
+//   node_systemd_unit_restarts_total   — loop de restart de unit systemd
+//   node_memory_MemAvailable_bytes     — memória (high/available)
+//   node_swap_*                        — swap
+//   node_filesystem_avail_bytes        — disco
+//   node_load1/5/15                    — load
+//   node_time_seconds                  — heartbeat / clock
+
+prometheus.exporter.unix "host" {
+  // Só os collectors que sustentam os alertas e o dashboard de host — o conjunto
+  // default do node_exporter (~900 séries) é desperdício no free tier.
+  set_collectors = [
+    "cpu",
+    "filesystem",
+    "loadavg",
+    "meminfo",
+    "swap",
+    "systemd",
+    "time",
+    "uname",
+  ]
+}
+
+// O exporter.unix só expõe targets; quem coleta é o scrape.
+prometheus.scrape "host" {
+  targets    = prometheus.exporter.unix.host.targets
+  forward_to = [otelcol.receiver.prometheus.host.receiver]
+  scrape_interval = "30s"
+}
+
+otelcol.receiver.prometheus "host" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.grafana_cloud.input]
+  }
+}
+
+otelcol.exporter.otlphttp "grafana_cloud" {
+  client {
+    endpoint = env("OTEL_EXPORTER_OTLP_ENDPOINT")
+    headers = {
+      // O valor CRU do env (sem o prefixo "Authorization=" do formato OTLP k=v):
+      // o Alloy usa o valor inteiro como header HTTP, o SDK Python faz o parse.
+      Authorization = env("OTEL_EXPORTER_OTLP_AUTH"),
+    }
+  }
+  retry_on_failure {
+    enabled          = true
+    initial_interval = "5s"
+    max_interval     = "30s"
+  }
+}

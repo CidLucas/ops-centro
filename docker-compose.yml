@@ -1,5 +1,9 @@
-# Stack local do Ops Centro: só o receiver por ora. Grafana Cloud e Turso são
+# Stack local do Ops Centro: receiver + coletor de host. Grafana Cloud e Turso são
 # serviços gerenciados (free tier) — não sobem aqui.
+#
+# O alloy coleta métricas do HOST Linux (issue #26) e manda via OTLP. Em Mac/Docker
+# Desktop ele amostraria a VM do Docker (não o Mac) — para host real, use o compose
+# de produção (deploy/docker-compose.yml), que roda com network_mode: host.
 services:
   receiver:
     build: .
@@ -13,3 +17,22 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
+
+  alloy:
+    image: grafana/alloy:v1.18.0
+    env_file: .env
+    network_mode: host
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --stability.level=public-preview
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /proc:/proc:ro
+      - /sys:/sys:ro
+      - /:/rootfs:ro
+      - /etc/hostname:/etc/hostname:ro
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+    restart: unless-stopped

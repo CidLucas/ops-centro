@@ -22,8 +22,14 @@ fora EC2    │        └─────────► #27 dead-man's switch (
 
 ## Fase A — Resiliência do observador (urgente, pós-incidente 05/08)
 
-### A1. #26 — Métricas de host da EC2 (memória, swap, disco, load)
-**Por quê agora:** o catálogo cobre só aplicação; o colapso de hoje foi de host e ninguém viu.
+### A1. #26 — Métricas de host da EC2 (memória, swap, disco, load) — ✅ implementada (05/08)
+**Status:** Alloy v1.18.0 no compose de produção (`deploy/alloy/config.alloy`), collectors
+cpu/filesystem/loadavg/meminfo/swap/systemd/time/uname, export via OTLP reusando o
+endpoint do `.env`. **Pendências:** (a) confirmação visual das séries `node_*` no
+Grafana Cloud (falta `GRAFANA_READ_TOKEN` na EC2 — criar service account `glsa_`
+Viewer); (b) o SSM precisa receber o token novo (`writer-ops-write`) com espaço
+literal + a var `OTEL_EXPORTER_OTLP_AUTH` — o `.env` da EC2 já está corrigido à mão,
+mas `env-from-ssm.sh` sobrescreve na próxima execução.
 
 - **O quê:** Alloy (Grafana Alloy) em container no compose de produção, com integração
   `prometheus.exporter.unix` (node_exporter embutido) + `prometheus.remote_write` para o
