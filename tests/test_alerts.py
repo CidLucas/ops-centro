@@ -35,6 +35,7 @@ def test_todos_os_arquivos_existem_no_repo():
         "apps.yaml",
         "free-tier.yaml",
         "turso-retencao.yaml",
+        "host.yaml",
         "roteamento.yaml",
     }
     for nome in a.build_files():
@@ -118,6 +119,33 @@ def test_free_tier_usa_o_datasource_de_uso():
 def test_regra_de_retencao_parada_alerta_na_ausencia_de_dado():
     """A regra que vigia as outras duas: aqui 'sem dado' é o sintoma, não a exceção."""
     regra = next(r for r in REGRAS if r.uid == "ops-centro-retencao-parada")
+    assert regra.no_data == "Alerting"
+    assert regra.op == "lt"
+
+
+def test_grupo_host_tem_quatro_regras_com_job_de_host():
+    """As regras de host leem a integração Unix (`job="integrations/unix"`, issue #26)."""
+    grupo = a.build_host()
+    assert grupo.file == "host.yaml"
+    assert grupo.name == "ops-centro-host"
+    assert len(grupo.rules) == 4
+    for regra in grupo.rules:
+        assert 'job="integrations/unix"' in regra.expr
+
+
+def test_restart_loop_usa_changes_no_estado_failed():
+    """O loop de restart é detectado por transições failed↔activating, não por uma métrica
+    de restarts que o node_exporter embutido no Alloy não expõe."""
+    regra = next(r for r in REGRAS if r.uid == "ops-centro-host-restart-loop")
+    assert "changes(" in regra.expr
+    assert 'state="failed"' in regra.expr
+    assert regra.severity == a.SEVERITY_CRITICAL
+
+
+def test_coletor_parado_alerta_na_ausencia_de_sinal():
+    """Mini dead-man's switch: se o Alloy sumir, `up` vira 0 ou NoData — e os dois são
+    o sintoma, então NoData também alerta (o #27 completo é outra issue)."""
+    regra = next(r for r in REGRAS if r.uid == "ops-centro-host-coletor-parado")
     assert regra.no_data == "Alerting"
     assert regra.op == "lt"
 

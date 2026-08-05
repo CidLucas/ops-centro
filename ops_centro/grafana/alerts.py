@@ -10,6 +10,7 @@ provisionamento do Grafana Alerting.
 | `apps.yaml` | `ops-centro-apps` | taxa de erro, latência p95 e falha de ingestão dos dois apps (§7) |
 | `free-tier.yaml` | `ops-centro-free-tier` | consumo do próprio free tier do Grafana Cloud (RNF02 / risco §10) |
 | `turso-retencao.yaml` | `ops-centro-turso` | teto de storage do Turso e saúde do job de limpeza (issue #9) |
+| `host.yaml` | `ops-centro-host` | loop de restart do systemd, memória e disco da EC2 (issue #28) |
 | `roteamento.yaml` | — | contact point `webhook` → receiver + notification policy |
 
 **Toda regra carrega o schema comum nas labels** (`app_name`, e `tenant_id` quando a série
@@ -650,7 +651,125 @@ Se a cota do plano mudar, mude em TURSO_LIMIT_BYTES aqui e em TURSO_DB_SIZE_LIMI
     )
 
 
-GROUP_BUILDERS = (build_apps, build_free_tier, build_turso)
+def build_host() -> RuleGroup:
+    """Saúde do host da EC2 — a causa do incidente de 05/08/2026, não o sintoma.
+
+    O `hermes-dashboard.service` ficou ~6 semanas (desde 23/jun) em loop de restart (800–
+    1300/h) sem nenhum alerta, até exaurir memória e swap e a máquina ficar inacessível —
+    só um humano descobriu. Estas regras pegam a causa (loop de restart) e os dois caminhos
+    até ela (memória e disco), mais o próprio coletor (mini dead-man's switch; o #27
+    completo — NoData + keep_firing + rota independente — é outra issue).
+    """
+    return RuleGroup(
+        file="host.yaml",
+        name="ops-centro-host",
+        interval_seconds=60,
+        header="""Alertas de host da EC2 — issue #28 (a causa do incidente de 05/08/2026).
+
+O `hermes-dashboard.service` ficou ~6 semanas (desde 23/jun) em loop de restart de 800–
+1300/h sem alerta, até exaurir memória e swap e a máquina ficar inacessível — só um humano
+descobriu. Estas regras vigiam a causa (restart loop) e os dois caminhos até ela (memória
+e disco), além do próprio coletor (mini dead-man's switch).
+
+Métricas: `job="integrations/unix"` — a integração Unix do Grafana Cloud via Alloy (issue
+#26). O node_exporter embutido no Alloy v1.18 não expõe `node_systemd_unit_restarts_total`,
+então o loop é detectado por `changes(node_systemd_unit_state{state="failed"}[15m])`: com
+`Restart=always` a unit alterna failed↔activating e `changes()` conta as transições —
+robusto mesmo com scrape de 30s.""",
+        rules=(
+            Rule(
+                uid="ops-centro-host-restart-loop",
+                title="Host: unit em loop de restart (failed ≥3x/15m)",
+                expr=(
+                    'changes(node_systemd_unit_state{job="integrations/unix", '
+                    'state="failed"}[15m])'
+                ),
+                op="gt",
+                threshold=6,
+                duration="5m",
+                severity=SEVERITY_CRITICAL,
+                component="ec2-host",
+                labels={ATTR_APP_NAME: "ops-centro-host"},
+                summary="Unit {{ $labels.name }} em loop de restart "
+                "({{ printf \"%.0f\" $values.A.Value }} transições failed/15m)",
+                description=(
+                    "A unit `{{ $labels.name }}` está alternando failed↔activating com "
+                    "`Restart=always` e `StartLimitIntervalSec=0` (o freio desligado): 800–1300 "
+                    "restarts/h por semanas — foi assim que a máquina exauriu memória e swap e "
+                    "ficou inacessível em 05/08/2026, depois de ~6 semanas sem alerta.\n"
+                    "Investigação: `systemctl status {{ $labels.name }}`, "
+                    "`journalctl -u {{ $labels.name }} --since -1h`; confira "
+                    "`StartLimitBurst`/`StartLimitIntervalSec` na unit; se o processo sobe e "
+                    "morre por porta ocupada, `ss -tlnp` na porta."
+                ),
+            ),
+            Rule(
+                uid="ops-centro-host-memoria",
+                title="Host: memória disponível abaixo de 10% do total",
+                expr=(
+                    '100 * node_memory_MemAvailable_bytes{job="integrations/unix"} / '
+                    'clamp_min(node_memory_MemTotal_bytes{job="integrations/unix"}, 1)'
+                ),
+                op="lt",
+                threshold=10,
+                duration="10m",
+                severity=SEVERITY_WARNING,
+                component="ec2-host",
+                labels={ATTR_APP_NAME: "ops-centro-host"},
+                summary="Memória disponível em {{ printf \"%.0f\" $values.A.Value }}% do total",
+                description=(
+                    "Abaixo de 10% é thrashing iminente — o que aconteceu no incidente de "
+                    "05/08/2026, quando o loop de restart exauriu memória e swap e a máquina "
+                    "ficou inacessível.\n"
+                    "Regime saudável hoje: ~45%. O piso `clamp_min` no denominador evita NaN "
+                    "com a série zerada."
+                ),
+            ),
+            Rule(
+                uid="ops-centro-host-disco",
+                title="Host: disco raiz com menos de 10% livre",
+                expr=(
+                    '100 * node_filesystem_avail_bytes{job="integrations/unix", '
+                    'mountpoint="/"} / clamp_min(node_filesystem_size_bytes'
+                    '{job="integrations/unix", mountpoint="/"}, 1)'
+                ),
+                op="lt",
+                threshold=10,
+                duration="10m",
+                severity=SEVERITY_WARNING,
+                component="ec2-host",
+                labels={ATTR_APP_NAME: "ops-centro-host"},
+                summary="Disco raiz com {{ printf \"%.0f\" $values.A.Value }}% livre",
+                description=(
+                    "Disco cheio é o que mata o gateway do Hermes (Errno 28) e orfana runs.\n"
+                    "Regime hoje: ~18%. Para liberar: limpe `~/.hermes/logs`, `~/.cache` e "
+                    "`opencode.db`."
+                ),
+            ),
+            Rule(
+                uid="ops-centro-host-coletor-parado",
+                title="Host: coletor de métricas sem sinal há 10m",
+                expr='up{job="integrations/unix"}',
+                op="lt",
+                threshold=1,
+                duration="10m",
+                severity=SEVERITY_CRITICAL,
+                component="ec2-host",
+                labels={ATTR_APP_NAME: "ops-centro-host"},
+                no_data="Alerting",  # ausência de sinal É o sintoma
+                summary="Coletor de métricas de host sem sinal há 10m",
+                description=(
+                    "O Alloy da EC2 parou de reportar: host caiu, container morreu ou o OTLP "
+                    "falhou — é o alerta que o incidente de 05/08/2026 não tinha.\n"
+                    "NoData vira alerta de propósito: aqui a ausência de sinal É o sintoma. "
+                    "Confira o estado do Alloy e se as métricas voltaram ao Mimir."
+                ),
+            ),
+        ),
+    )
+
+
+GROUP_BUILDERS = (build_apps, build_free_tier, build_turso, build_host)
 
 
 def build_groups() -> list[RuleGroup]:
@@ -878,7 +997,10 @@ def validate_rules(rules: Iterable[Rule] | None = None) -> list[str]:
             problemas.append(f"{rule.uid}: histogram_quantile sem `le` no agrupamento devolve NaN")
         # Divisão por série (e não por constante) precisa de piso: sem tráfego na janela o
         # denominador zera, e `NaN` numa regra não vira "0%" — vira estado de erro.
-        for divisor in re.findall(r"/\s*([A-Za-z_(][\w(]*)", rule.expr):
+        # Label value com `/` dentro de aspas (ex.: `job="integrations/unix"`) não é divisão:
+        # mascarar o texto citado antes de procurar o divisor evita o falso positivo.
+        sem_aspas = re.sub(r'"[^"]*"', '""', rule.expr)
+        for divisor in re.findall(r"/\s*([A-Za-z_(][\w(]*)", sem_aspas):
             if not divisor.startswith("clamp_min"):
                 problemas.append(
                     f"{rule.uid}: divisão por `{divisor}` sem clamp_min — zero na janela vira NaN"

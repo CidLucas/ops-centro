@@ -1,0 +1,172 @@
+# Alertas de host da EC2 — issue #28 (a causa do incidente de 05/08/2026).
+#
+# O `hermes-dashboard.service` ficou ~6 semanas (desde 23/jun) em loop de restart de 800–
+# 1300/h sem alerta, até exaurir memória e swap e a máquina ficar inacessível — só um humano
+# descobriu. Estas regras vigiam a causa (restart loop) e os dois caminhos até ela (memória
+# e disco), além do próprio coletor (mini dead-man's switch).
+#
+# Métricas: `job="integrations/unix"` — a integração Unix do Grafana Cloud via Alloy (issue
+# #26). O node_exporter embutido no Alloy v1.18 não expõe `node_systemd_unit_restarts_total`,
+# então o loop é detectado por `changes(node_systemd_unit_state{state="failed"}[15m])`: com
+# `Restart=always` a unit alterna failed↔activating e `changes()` conta as transições —
+# robusto mesmo com scrape de 30s.
+
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: ops-centro-host
+    folder: Ops Centro
+    interval: 1m
+    rules:
+      - uid: ops-centro-host-restart-loop
+        title: 'Host: unit em loop de restart (failed ≥3x/15m)'
+        condition: B
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Unit {{ $labels.name }} em loop de restart ({{ printf "%.0f" $values.A.Value }} transições failed/15m)
+          description: |-
+            A unit `{{ $labels.name }}` está alternando failed↔activating com `Restart=always` e `StartLimitIntervalSec=0` (o freio desligado): 800–1300 restarts/h por semanas — foi assim que a máquina exauriu memória e swap e ficou inacessível em 05/08/2026, depois de ~6 semanas sem alerta.
+            Investigação: `systemctl status {{ $labels.name }}`, `journalctl -u {{ $labels.name }} --since -1h`; confira `StartLimitBurst`/`StartLimitIntervalSec` na unit; se o processo sobe e morre por porta ocupada, `ss -tlnp` na porta.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: critical
+          component: ec2-host
+          app_name: ops-centro-host
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: changes(node_systemd_unit_state{job="integrations/unix", state="failed"}[15m])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 6
+      - uid: ops-centro-host-memoria
+        title: 'Host: memória disponível abaixo de 10% do total'
+        condition: B
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Memória disponível em {{ printf "%.0f" $values.A.Value }}% do total
+          description: |-
+            Abaixo de 10% é thrashing iminente — o que aconteceu no incidente de 05/08/2026, quando o loop de restart exauriu memória e swap e a máquina ficou inacessível.
+            Regime saudável hoje: ~45%. O piso `clamp_min` no denominador evita NaN com a série zerada.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: ec2-host
+          app_name: ops-centro-host
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * node_memory_MemAvailable_bytes{job="integrations/unix"} / clamp_min(node_memory_MemTotal_bytes{job="integrations/unix"}, 1)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 10
+      - uid: ops-centro-host-disco
+        title: 'Host: disco raiz com menos de 10% livre'
+        condition: B
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Disco raiz com {{ printf "%.0f" $values.A.Value }}% livre
+          description: |-
+            Disco cheio é o que mata o gateway do Hermes (Errno 28) e orfana runs.
+            Regime hoje: ~18%. Para liberar: limpe `~/.hermes/logs`, `~/.cache` e `opencode.db`.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: warning
+          component: ec2-host
+          app_name: ops-centro-host
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: 100 * node_filesystem_avail_bytes{job="integrations/unix", mountpoint="/"} / clamp_min(node_filesystem_size_bytes{job="integrations/unix", mountpoint="/"}, 1)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 10
+      - uid: ops-centro-host-coletor-parado
+        title: 'Host: coletor de métricas sem sinal há 10m'
+        condition: B
+        for: 10m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: Coletor de métricas de host sem sinal há 10m
+          description: |-
+            O Alloy da EC2 parou de reportar: host caiu, container morreu ou o OTLP falhou — é o alerta que o incidente de 05/08/2026 não tinha.
+            NoData vira alerta de propósito: aqui a ausência de sinal É o sintoma. Confira o estado do Alloy e se as métricas voltaram ao Mimir.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: critical
+          component: ec2-host
+          app_name: ops-centro-host
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: up{job="integrations/unix"}
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
