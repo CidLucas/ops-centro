@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -314,12 +316,16 @@ def webhook_url() -> str:
     return os.environ.get("HERMES_WEBHOOK_URL", "").strip()
 
 
-def _auth_headers() -> dict[str, str]:
-    """Token nos dois formatos, mesmo padrão do Grafana→receiver (docs/alertas.md §3)."""
+def _auth_headers(corpo: bytes | None = None) -> dict[str, str]:
+    """Token nos dois formatos + assinatura HMAC-SHA256 do corpo (X-Hub-Signature-256)."""
     token = os.environ.get("HERMES_WEBHOOK_TOKEN", "").strip()
     if not token:
         return {}
-    return {"X-Hermes-Token": token, "Authorization": f"Bearer {token}"}
+    headers = {"X-Hermes-Token": token, "Authorization": f"Bearer {token}"}
+    if corpo is not None:
+        assinatura = hmac.new(token.encode("utf-8"), corpo, hashlib.sha256).hexdigest()
+        headers["X-Hub-Signature-256"] = f"sha256={assinatura}"
+    return headers
 
 
 # --- métricas do próprio envio ---------------------------------------------------------
@@ -490,7 +496,8 @@ async def deliver(
     espera = backoff if backoff is not None else _float_env("HERMES_BACKOFF", DEFAULT_BACKOFF_SECONDS)
     limite = timeout if timeout is not None else _float_env("HERMES_TIMEOUT", DEFAULT_TIMEOUT_SECONDS)
     payload = notification.as_payload()
-    headers = _auth_headers()
+    corpo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = _auth_headers(corpo)
 
     inicio = time.perf_counter()
     proprio = client is None
@@ -499,7 +506,12 @@ async def deliver(
     try:
         for tentativa in range(1, max(tentativas, 1) + 1):
             try:
-                resposta = await http.post(destino, json=payload, headers=headers, timeout=limite)
+                resposta = await http.post(
+                    destino,
+                    content=corpo,
+                    headers={**headers, "Content-Type": "application/json"},
+                    timeout=limite,
+                )
             except httpx.HTTPError as exc:
                 motivo = f"erro de rede: {exc}"
             else:

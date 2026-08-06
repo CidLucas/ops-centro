@@ -8,6 +8,8 @@ As garantias que a issue pede, na ordem em que quebram na vida real:
 3. tempestade de alerta ⇒ rate limit, com o número de suprimidas anunciado depois.
 """
 
+import hashlib
+import hmac
 import json
 
 import httpx
@@ -128,12 +130,22 @@ def test_sem_logs_a_mensagem_diz_o_motivo():
 
 
 # --- entrega ---------------------------------------------------------------------------
-async def test_entrega_no_primeiro_ok():
+async def test_entrega_no_primeiro_ok(monkeypatch):
+    monkeypatch.setenv("HERMES_WEBHOOK_TOKEN", "segredo")
+    notificacao = h.notification_from_alerts([enriquecido()])
+    payload = notificacao.as_payload()
+    corpo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     client, chamadas = transporte([200])
-    resultado = await h.deliver(h.notification_from_alerts([enriquecido()]),
+    resultado = await h.deliver(notificacao,
                                 client=client, url="https://hermes/notify")
     assert resultado.status == h.DELIVERED and resultado.attempts == 1
     assert json.loads(chamadas[0].content)["kind"] == h.KIND_ALERT
+    # A assinatura cobre exatamente os bytes enviados (serializa → assina → envia).
+    assert chamadas[0].content == corpo
+    assinatura = hmac.new(b"segredo", chamadas[0].content, hashlib.sha256).hexdigest()
+    assert chamadas[0].headers["x-hub-signature-256"] == f"sha256={assinatura}"
+    assert chamadas[0].headers["x-hermes-token"] == "segredo"
+    assert chamadas[0].headers["authorization"] == "Bearer segredo"
 
 
 async def test_token_vai_nos_dois_formatos(monkeypatch):
@@ -143,6 +155,17 @@ async def test_token_vai_nos_dois_formatos(monkeypatch):
                     url="https://hermes/notify")
     assert chamadas[0].headers["x-hermes-token"] == "segredo"
     assert chamadas[0].headers["authorization"] == "Bearer segredo"
+
+
+async def test_sem_token_auth_headers_vazias_e_post_sem_headers_de_auth(monkeypatch):
+    monkeypatch.delenv("HERMES_WEBHOOK_TOKEN", raising=False)
+    assert h._auth_headers(b"qualquer corpo") == {}
+    client, chamadas = transporte([200])
+    await h.deliver(h.notification_from_alerts([enriquecido()]), client=client,
+                    url="https://hermes/notify")
+    assert "x-hermes-token" not in chamadas[0].headers
+    assert "authorization" not in chamadas[0].headers
+    assert "x-hub-signature-256" not in chamadas[0].headers
 
 
 async def test_sem_url_configurada_vira_no_op(monkeypatch):
