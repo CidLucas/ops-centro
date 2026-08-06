@@ -25,10 +25,10 @@ jobs:
     name: Build + smoke + push da imagem
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # O GHCR só aceita nome de imagem em minúsculas; `github.repository` preserva a
       # capitalização do dono (CidLucas), então a conversão é obrigatória.
@@ -40,7 +40,7 @@ jobs:
       # precisa voltar atrás); `v1.2.3` e `1.2` nas tags de release.
       - name: Tags da imagem
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.img.outputs.name }}
           tags: |
@@ -52,7 +52,7 @@ jobs:
       # Build LOCAL: push=false, load=true carrega a imagem no daemon do runner para os
       # steps de smoke. Cache de camadas via GitHub Actions cache.
       - name: Build da imagem (local, para o smoke)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -99,7 +99,7 @@ jobs:
           test "${ok:-0}" = "1" || { echo "ERRO: /healthz não respondeu em 20s"; exit 1; }
 
       - name: Login no GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -132,7 +132,7 @@ jobs:
     name: Valida os composes (local e de produção)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # docker compose config interpola ${VARS}; sem .env ele reclama do env_file.
       # Usa o .env.example como base só para a validação estática.
