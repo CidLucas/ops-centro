@@ -1,15 +1,17 @@
-# Contact point e notification policy — issue #12.
+# Contact points e notification policy — issues #12 e #25.
 #
 # Para onde os alertas vão: o contact point `ops-centro-hermes` é o webhook do receiver
 # deste repo (`POST /alerts/grafana`), que enriquece com o contexto do Turso (#14) e
-# repassa ao Hermes/Telegram (#15).
+# repassa ao Hermes/Telegram (#15). O contact point `ops-centro-telegram` é o Telegram
+# nativo do Grafana Cloud (#25): a rota de infra (`component=ec2-host`) vai DIRETO a ele,
+# sem depender da EC2 — se o host cai, o Grafana Cloud (gerenciado) continua entregando.
 #
-# **Autenticação (RNF06):** nenhum segredo aqui. `${ALERT_WEBHOOK_TOKEN}` e
-# `${RECEIVER_WEBHOOK_URL}` são resolvidos do ambiente — pelo próprio Grafana no
-# provisionamento por arquivo, e pelo `--apply` antes de chamar a API. O token vai nos dois
-# formatos que o receiver aceita: header `X-Alert-Token` (o do contrato da issue) e
-# `Authorization: Bearer` (que toda versão do contact point webhook suporta, mesmo as
-# anteriores ao suporte a headers customizados).
+# **Autenticação (RNF06):** nenhum segredo aqui. `${ALERT_WEBHOOK_TOKEN}`,
+# `${RECEIVER_WEBHOOK_URL}`, `${TELEGRAM_BOT_TOKEN}` e `${TELEGRAM_CHAT_ID}` são resolvidos
+# do ambiente — pelo próprio Grafana no provisionamento por arquivo, e pelo `--apply` antes
+# de chamar a API. O token do webhook vai nos dois formatos que o receiver aceita: header
+# `X-Alert-Token` (o do contrato da issue) e `Authorization: Bearer` (que toda versão do
+# contact point webhook suporta, mesmo as anteriores ao suporte a headers customizados).
 #
 # **Agrupamento:** por `alertname` + `app_name` + `tenant_id`. Sem isso, um incidente que
 # atinge 40 tenants vira 40 mensagens no Telegram — a tempestade de alertas que faz as
@@ -34,6 +36,15 @@ contactPoints:
           authorization_credentials: ${ALERT_WEBHOOK_TOKEN}
           headers:
             X-Alert-Token: ${ALERT_WEBHOOK_TOKEN}
+  - orgId: 1
+    name: ops-centro-telegram
+    receivers:
+      - uid: ops-centro-telegram-bot
+        type: telegram
+        disableResolveMessage: false
+        settings:
+          bottoken: ${TELEGRAM_BOT_TOKEN}
+          chatid: ${TELEGRAM_CHAT_ID}
 policies:
   - orgId: 1
     receiver: ops-centro-hermes
@@ -45,6 +56,15 @@ policies:
     group_interval: 5m
     repeat_interval: 4h
     routes:
+      - receiver: ops-centro-telegram
+        object_matchers:
+          - - component
+            - '='
+            - ec2-host
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 1h
+        continue: false
       - receiver: ops-centro-hermes
         object_matchers:
           - - severity

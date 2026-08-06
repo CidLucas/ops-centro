@@ -56,6 +56,9 @@ DS_EXPR = "__expr__"
 RECEIVER_NAME = "ops-centro-hermes"
 RECEIVER_UID = "ops-centro-hermes-webhook"
 
+TELEGRAM_NAME = "ops-centro-telegram"
+TELEGRAM_UID = "ops-centro-telegram-bot"
+
 SEVERITY_WARNING = "warning"
 SEVERITY_CRITICAL = "critical"
 KNOWN_SEVERITIES = frozenset({SEVERITY_WARNING, SEVERITY_CRITICAL})
@@ -783,18 +786,20 @@ def all_rules() -> list[Rule]:
 # --- roteamento: contact point + notification policy --------------------------------
 ROUTING_FILE = "roteamento.yaml"
 
-ROUTING_HEADER = """Contact point e notification policy — issue #12.
+ROUTING_HEADER = """Contact points e notification policy — issues #12 e #25.
 
 Para onde os alertas vão: o contact point `ops-centro-hermes` é o webhook do receiver
 deste repo (`POST /alerts/grafana`), que enriquece com o contexto do Turso (#14) e
-repassa ao Hermes/Telegram (#15).
+repassa ao Hermes/Telegram (#15). O contact point `ops-centro-telegram` é o Telegram
+nativo do Grafana Cloud (#25): a rota de infra (`component=ec2-host`) vai DIRETO a ele,
+sem depender da EC2 — se o host cai, o Grafana Cloud (gerenciado) continua entregando.
 
-**Autenticação (RNF06):** nenhum segredo aqui. `${ALERT_WEBHOOK_TOKEN}` e
-`${RECEIVER_WEBHOOK_URL}` são resolvidos do ambiente — pelo próprio Grafana no
-provisionamento por arquivo, e pelo `--apply` antes de chamar a API. O token vai nos dois
-formatos que o receiver aceita: header `X-Alert-Token` (o do contrato da issue) e
-`Authorization: Bearer` (que toda versão do contact point webhook suporta, mesmo as
-anteriores ao suporte a headers customizados).
+**Autenticação (RNF06):** nenhum segredo aqui. `${ALERT_WEBHOOK_TOKEN}`,
+`${RECEIVER_WEBHOOK_URL}`, `${TELEGRAM_BOT_TOKEN}` e `${TELEGRAM_CHAT_ID}` são resolvidos
+do ambiente — pelo próprio Grafana no provisionamento por arquivo, e pelo `--apply` antes
+de chamar a API. O token do webhook vai nos dois formatos que o receiver aceita: header
+`X-Alert-Token` (o do contrato da issue) e `Authorization: Bearer` (que toda versão do
+contact point webhook suporta, mesmo as anteriores ao suporte a headers customizados).
 
 **Agrupamento:** por `alertname` + `app_name` + `tenant_id`. Sem isso, um incidente que
 atinge 40 tenants vira 40 mensagens no Telegram — a tempestade de alertas que faz as
@@ -831,6 +836,34 @@ def build_contact_point() -> dict[str, Any]:
     }
 
 
+def build_telegram_contact_point() -> dict[str, Any]:
+    """Contact point Telegram nativo do Grafana Cloud (issue #25).
+
+    Não depende da EC2 do Hermes: se o host cai, o Grafana Cloud (gerenciado) continua
+    entregando o alerta de infra. `bottoken`/`chatid` são os nomes de settings que o
+    Grafana usa para contact points Telegram; os valores são placeholders resolvidos no
+    `--apply` — o token do bot nunca entra no repo (RNF06, mesmo padrão do
+    `${ALERT_WEBHOOK_TOKEN}`).
+    """
+    return {
+        "orgId": 1,
+        "name": TELEGRAM_NAME,
+        "receivers": [
+            {
+                "uid": TELEGRAM_UID,
+                "type": "telegram",
+                # `disableResolveMessage: false`: o "resolvido" é metade do valor de um
+                # alerta — sem ele ninguém sabe quando o incidente acabou.
+                "disableResolveMessage": False,
+                "settings": {
+                    "bottoken": "${TELEGRAM_BOT_TOKEN}",
+                    "chatid": "${TELEGRAM_CHAT_ID}",
+                },
+            }
+        ],
+    }
+
+
 def build_policy() -> dict[str, Any]:
     """Árvore de roteamento: tudo para o receiver, agrupado pelo schema comum."""
     return {
@@ -843,6 +876,15 @@ def build_policy() -> dict[str, Any]:
         "group_interval": "5m",
         "repeat_interval": "4h",
         "routes": [
+            {
+                # Infra: direto ao Telegram nativo do Grafana Cloud — NÃO depende da EC2.
+                "receiver": TELEGRAM_NAME,
+                "object_matchers": [["component", "=", "ec2-host"]],
+                "group_wait": "10s",
+                "group_interval": "5m",
+                "repeat_interval": "1h",
+                "continue": False,
+            },
             {
                 "receiver": RECEIVER_NAME,
                 "object_matchers": [["severity", "=", SEVERITY_CRITICAL]],
@@ -858,7 +900,7 @@ def build_policy() -> dict[str, Any]:
 def build_routing() -> dict[str, Any]:
     return {
         "apiVersion": 1,
-        "contactPoints": [build_contact_point()],
+        "contactPoints": [build_contact_point(), build_telegram_contact_point()],
         "policies": [build_policy()],
     }
 
@@ -1021,6 +1063,8 @@ def _env_substitutions() -> dict[str, str]:
         "DS_USAGE": os.environ.get("GRAFANA_USAGE_DS_UID", "grafanacloud-usage"),
         "RECEIVER_WEBHOOK_URL": os.environ.get("RECEIVER_WEBHOOK_URL", ""),
         "ALERT_WEBHOOK_TOKEN": os.environ.get("ALERT_WEBHOOK_TOKEN", ""),
+        "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        "TELEGRAM_CHAT_ID": os.environ.get("TELEGRAM_CHAT_ID", ""),
     }
 
 
@@ -1059,7 +1103,12 @@ class AlertingAPI:
         um contact point que apontaria para lugar nenhum."""
         return [
             nome
-            for nome in ("RECEIVER_WEBHOOK_URL", "ALERT_WEBHOOK_TOKEN")
+            for nome in (
+                "RECEIVER_WEBHOOK_URL",
+                "ALERT_WEBHOOK_TOKEN",
+                "TELEGRAM_BOT_TOKEN",
+                "TELEGRAM_CHAT_ID",
+            )
             if not self.valores.get(nome)
         ]
 
@@ -1095,20 +1144,27 @@ class AlertingAPI:
             return True, f"{len(rules)} regra(s) · intervalo {grupo.interval}"
         return False, _dica_permissao(resposta, "alert.rules:write")
 
-    def apply_contact_point(self) -> tuple[bool, str]:
-        """Cria ou atualiza o contact point do receiver (idempotente pelo uid)."""
-        receiver = expand(build_contact_point()["receivers"][0], self.valores)
-        corpo = {"name": RECEIVER_NAME, **receiver}
-        resposta = self.api._put(f"/api/v1/provisioning/contact-points/{RECEIVER_UID}", corpo)
-        if resposta.status_code in (200, 202):
-            return True, f"contact point '{RECEIVER_NAME}' atualizado"
-        # PUT em uid inexistente é 404: a primeira publicação num stack novo passa por aqui.
-        if resposta.status_code == 404:
-            criado = self.api._post("/api/v1/provisioning/contact-points", corpo)
-            if criado.status_code in (200, 201, 202):
-                return True, f"contact point '{RECEIVER_NAME}' criado"
-            return False, _dica_permissao(criado, "alert.notifications:write")
-        return False, _dica_permissao(resposta, "alert.notifications:write")
+    def apply_contact_point(self) -> list[tuple[bool, str]]:
+        """Cria ou atualiza os contact points (webhook + telegram), idempotentes pelo uid."""
+        resultados = []
+        for contact_point in (build_contact_point(), build_telegram_contact_point()):
+            (receiver,) = contact_point["receivers"]
+            nome, uid = contact_point["name"], receiver["uid"]
+            corpo = {"name": nome, **expand(receiver, self.valores)}
+            resposta = self.api._put(f"/api/v1/provisioning/contact-points/{uid}", corpo)
+            if resposta.status_code in (200, 202):
+                resultados.append((True, f"contact point '{nome}' atualizado"))
+                continue
+            # PUT em uid inexistente é 404: a primeira publicação num stack novo passa por aqui.
+            if resposta.status_code == 404:
+                criado = self.api._post("/api/v1/provisioning/contact-points", corpo)
+                if criado.status_code in (200, 201, 202):
+                    resultados.append((True, f"contact point '{nome}' criado"))
+                    continue
+                resultados.append((False, _dica_permissao(criado, "alert.notifications:write")))
+                continue
+            resultados.append((False, _dica_permissao(resposta, "alert.notifications:write")))
+        return resultados
 
     def apply_policy(self) -> tuple[bool, str]:
         """Substitui a árvore de roteamento do org (o Grafana só tem uma)."""
@@ -1136,9 +1192,9 @@ def apply_all(api: AlertingAPI | None = None, *, skip_policy: bool = False) -> i
         return 1
 
     falhas = 0
-    ok, detalhe = api.apply_contact_point()
-    falhas += 0 if ok else 1
-    print(f"[{'OK' if ok else 'FALHA'}] {RECEIVER_NAME}: {detalhe}")
+    for ok, detalhe in api.apply_contact_point():
+        falhas += 0 if ok else 1
+        print(f"[{'OK' if ok else 'FALHA'}] contact point: {detalhe}")
 
     for grupo in build_groups():
         ok, detalhe = api.apply_group(grupo)

@@ -163,6 +163,13 @@ def test_estrutura_do_provisionamento():
 
 
 # --- roteamento --------------------------------------------------------------------
+def test_roteamento_tem_os_dois_contact_points():
+    """Webhook (receiver) + Telegram nativo — a rota de infra não passa pela EC2 (#25)."""
+    contact_points = a.build_routing()["contactPoints"]
+    assert len(contact_points) == 2
+    assert {cp["name"] for cp in contact_points} == {a.RECEIVER_NAME, a.TELEGRAM_NAME}
+
+
 def test_contact_point_aponta_para_o_receiver_com_o_token():
     receiver = a.build_contact_point()["receivers"][0]
     assert receiver["type"] == "webhook"
@@ -173,13 +180,32 @@ def test_contact_point_aponta_para_o_receiver_com_o_token():
     assert receiver["settings"]["authorization_credentials"] == "${ALERT_WEBHOOK_TOKEN}"
 
 
+def test_telegram_usa_placeholder_para_bot_e_chat():
+    """O contact point Telegram só carrega placeholder — o token do bot nunca vai ao repo."""
+    contact_point = a.build_telegram_contact_point()
+    assert contact_point["name"] == a.TELEGRAM_NAME
+    (receiver,) = contact_point["receivers"]
+    assert receiver["uid"] == a.TELEGRAM_UID
+    assert receiver["type"] == "telegram"
+    assert receiver["disableResolveMessage"] is False
+    assert receiver["settings"]["bottoken"] == "${TELEGRAM_BOT_TOKEN}"
+    assert receiver["settings"]["chatid"] == "${TELEGRAM_CHAT_ID}"
+
+
 def test_policy_agrupa_por_app_e_tenant():
     """Sem agrupamento, um incidente que atinge 40 tenants vira 40 mensagens."""
     policy = a.build_policy()
     assert policy["receiver"] == a.RECEIVER_NAME
     assert ATTR_APP_NAME in policy["group_by"]
     assert ATTR_TENANT_ID in policy["group_by"]
-    assert policy["routes"][0]["object_matchers"] == [["severity", "=", a.SEVERITY_CRITICAL]]
+    infra, critical = policy["routes"]
+    # A rota de infra vem primeiro: alerta de host critical também casaria na rota de
+    # severity=critical, e o Grafana usa a primeira rota que casa.
+    assert infra["receiver"] == a.TELEGRAM_NAME
+    assert ["component", "=", "ec2-host"] in infra["object_matchers"]
+    assert infra["continue"] is False
+    assert critical["receiver"] == a.RECEIVER_NAME
+    assert critical["object_matchers"] == [["severity", "=", a.SEVERITY_CRITICAL]]
 
 
 def test_nenhum_segredo_no_repo():
@@ -187,6 +213,8 @@ def test_nenhum_segredo_no_repo():
     conteudo = a.build_files()[a.ROUTING_FILE]
     assert "${ALERT_WEBHOOK_TOKEN}" in conteudo
     assert "${RECEIVER_WEBHOOK_URL}" in conteudo
+    assert "${TELEGRAM_BOT_TOKEN}" in conteudo
+    assert "${TELEGRAM_CHAT_ID}" in conteudo
     for suspeito in ("glsa_", "glc_", "Bearer glsa"):
         assert suspeito not in conteudo
 
@@ -199,6 +227,14 @@ def test_expand_resolve_os_placeholders():
     assert settings["headers"]["X-Alert-Token"] == "segredo"
 
 
+def test_expand_resolve_os_placeholders_do_telegram():
+    valores = {"TELEGRAM_BOT_TOKEN": "123456:segredo", "TELEGRAM_CHAT_ID": "-100123"}
+    resolvido = a.expand(a.build_telegram_contact_point(), valores)
+    settings = resolvido["receivers"][0]["settings"]
+    assert settings["bottoken"] == "123456:segredo"
+    assert settings["chatid"] == "-100123"
+
+
 def test_expand_preserva_placeholder_desconhecido():
     assert a.expand("${NAO_EXISTE}", {}) == "${NAO_EXISTE}"
 
@@ -209,6 +245,8 @@ VALORES = {
     "DS_USAGE": "grafanacloud-usage",
     "RECEIVER_WEBHOOK_URL": "https://ops.exemplo.com/alerts/grafana",
     "ALERT_WEBHOOK_TOKEN": "segredo",
+    "TELEGRAM_BOT_TOKEN": "123456:bot-segredo",
+    "TELEGRAM_CHAT_ID": "-100123456789",
 }
 
 
@@ -242,6 +280,7 @@ def test_aplicacao_publica_contact_point_grupos_e_policy():
     assert a.apply_all(api) == 0
     caminhos = [caminho for _, caminho, _ in api.chamadas]
     assert f"/api/v1/provisioning/contact-points/{a.RECEIVER_UID}" in caminhos
+    assert f"/api/v1/provisioning/contact-points/{a.TELEGRAM_UID}" in caminhos
     for grupo in GRUPOS:
         assert f"/api/v1/provisioning/folder/{FOLDER_UID}/rule-groups/{grupo.name}" in caminhos
     assert "/api/v1/provisioning/policies" in caminhos
