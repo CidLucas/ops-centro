@@ -179,8 +179,35 @@ Roteiro do critério de aceite ("alerta disparado no Grafana chega no Telegram e
    `curl -H "X-Alert-Token: $ALERT_WEBHOOK_TOKEN" -d '{"command":"/status"}' \
    https://<domínio>/hermes/consulta`).
 
-> **Estado (2026-07-24):** verificado localmente de ponta a ponta com um Hermes falso —
-> webhook do Grafana → enriquecimento no Turso → envelope entregue (`HTTP 200`, 1
-> tentativa) → ação autônoma de pausa (#17) anunciada no mesmo canal → `/erros hoje`
-> respondendo pelo `POST /hermes/consulta`. Falta o handler do lado do Hermes real e o
-> disparo a partir do Grafana Cloud (§4.2).
+> **Estado (2026-08-06):** relay real no ar e validado de ponta a ponta — POST sintético
+> no formato do Grafana Cloud → receiver (enriquecimento) → `POST HERMES_WEBHOOK_URL`
+> assinado com HMAC-SHA256 → rota `ops-centro-alerts` do gateway (direct delivery) →
+> Telegram. `delivery.status=entregue`, `attempts=1`, `HTTP 200`; mensagem confirmada
+> no gateway (`direct-deliver ... target=telegram`) e no chat.
+
+## 6. Relay no Hermes (gateway webhook, porta 8644)
+
+O lado do Hermes é um **relay determinístico** (zero LLM): o gateway expõe uma rota de
+webhook que renderiza o template e entrega direto ao Telegram.
+
+```bash
+hermes webhook subscribe ops-centro-alerts \
+  --deliver telegram --deliver-chat-id "<chat_id>" \
+  --deliver-only --prompt "{text}" \
+  --description "Relay de alertas enriquecidos do ops-centro (#15)"
+```
+
+| Peça | Valor |
+| --- | --- |
+| Rota | `ops-centro-alerts` (`http://localhost:8644/webhooks/ops-centro-alerts`) |
+| Do container do receiver | `http://172.18.0.1:8644/webhooks/ops-centro-alerts` (bridge do compose) |
+| Auth | HMAC-SHA256 — header `X-Hub-Signature-256: sha256=<hmac(secret, raw_body)>` |
+| Secret | o valor de `HERMES_WEBHOOK_TOKEN` no `.env` (é o secret da assinatura) |
+
+O `text` do envelope já vem em MarkdownV2 (escape feito no receiver); o relay repassa
+literal. Sem `--deliver-only`, o gateway montaria uma run de agente (custo e latência)
+— desnecessário quando a formatação já mora no receiver.
+
+**Observabilidade:** cada entrega aparece no gateway como `[webhook] direct-deliver ...
+target=telegram msg_len=<n> delivery=<id>`; falhas do receiver caem em
+`hermes_dead_letter` (ver §5).
