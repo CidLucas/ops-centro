@@ -18,6 +18,7 @@ Hermes; **quem** pode confirmar é a allowlist de `chat_id` do `confirmations.py
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
@@ -31,7 +32,7 @@ from pydantic import BaseModel, Field
 from ops_centro import __version__
 from ops_centro.conventions import APP_OPS_CENTRO, build_resource_attributes
 from ops_centro.metrics import common_labels
-from ops_centro.receiver import actions
+from ops_centro.receiver import actions, heartbeat
 from ops_centro.receiver.confirmations import confirm
 from ops_centro.receiver.enrichment import enrich_alerts, summarize
 from ops_centro.receiver.hermes import notify_alerts
@@ -87,18 +88,29 @@ class ConfirmacaoPayload(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _heartbeat_task
     # Pausa cujo TTL venceu enquanto o receiver estava fora precisa ser desfeita ao voltar:
     # o estado mora no Turso (issue #17), então um restart não deixa tool pausada para
     # sempre. Sem Turso configurado, é no-op.
     await actions.sweep_expired()
+    # Heartbeat (issue #27): o receiver passa a emitir série contínua — é isso que dá NoData
+    # para a regra `ops-centro-host-deadman` observar quando a EC2 emudece. Sem OTLP
+    # configurado, vira no-op silencioso (mesma filosofia do resto da telemetria).
+    _heartbeat_task = heartbeat.start(heartbeat._interval_seconds())
     yield
     # Drena o writer de logs (RF05) antes de derrubar a telemetria: o que estiver
-    # na fila ainda precisa do trace correspondente exportado.
+    # na fila ainda precisa do trace correspondente exportado. O heartbeat para ANTES do
+    # shutdown_observability, para o último batimento ser exportado.
+    heartbeat.stop(_heartbeat_task)
     shutdown_log_writer()
     await shutdown_observability()
 
 
 app = FastAPI(title="ops-centro receiver", version=__version__, lifespan=lifespan)
+
+# Task do heartbeat (issue #27), criada no start do lifespan e cancelada no shutdown. Fica
+# como estado de módulo para o teste conseguir inspecionar (mesmo padrão do `_alerts_counter`).
+_heartbeat_task: asyncio.Task | None = None
 
 # Atributos comuns (RF02) — precisam ir para o Resource do OTel, senão o sinal chega
 # no Grafana só com service.name e some das queries cruzadas por app_name/environment.

@@ -13,6 +13,7 @@ from ops_centro.conventions import (
     ALLOWED_METRIC_LABELS,
     APP_AGENTS_PLATFORM,
     APP_FILE_MEMORY,
+    APP_OPS_CENTRO,
     ATTR_TENANT_ID,
     METRIC_PREFIXES,
 )
@@ -89,6 +90,18 @@ def test_metricas_ja_em_producao_no_mcp_brain_estao_congeladas():
         "context_mcp_ingestion_stage_total",
         "context_mcp_ingestion_stage_duration_seconds",
     }
+
+
+def test_heartbeat_esta_no_catalogo_como_metrica_de_operacao():
+    """`ops_centro_heartbeat_total` (issue #27) é série de operação do próprio pipeline,
+    como as outras `ops_centro_*`: já emitida pelo receiver (status=EMITTING), e sem
+    labels próprias — o batimento não tem dimensão a fatiar."""
+    metrica = m.BY_NAME["ops_centro_heartbeat_total"]
+    assert metrica.app == APP_OPS_CENTRO
+    assert metrica.kind == m.COUNTER
+    assert metrica.labels == ()
+    assert metrica.item == m.ITEM_SELF
+    assert metrica.status == m.EMITTING
 
 
 # --- checker contra o Prometheus ------------------------------------------------

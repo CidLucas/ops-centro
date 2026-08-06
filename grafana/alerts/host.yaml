@@ -1,9 +1,10 @@
-# Alertas de host da EC2 — issue #28 (a causa do incidente de 05/08/2026).
+# Alertas de host da EC2 — issues #28 e #27 (a causa do incidente de 05/08/2026).
 #
 # O `hermes-dashboard.service` ficou ~6 semanas (desde 23/jun) em loop de restart de 800–
 # 1300/h sem alerta, até exaurir memória e swap e a máquina ficar inacessível — só um humano
-# descobriu. Estas regras vigiam a causa (restart loop) e os dois caminhos até ela (memória
-# e disco), além do próprio coletor (mini dead-man's switch).
+# descobriu. Estas regras vigiam a causa (restart loop), os dois caminhos até ela (memória
+# e disco), o coletor de métricas (mini dead-man's switch) e o receiver (dead-man's switch
+# do #27: heartbeat + NoData, roteado fora da EC2).
 #
 # Métricas: `job="integrations/unix"` — a integração Unix do Grafana Cloud via Alloy (issue
 # #26). O node_exporter embutido no Alloy v1.18 não expõe `node_systemd_unit_restarts_total`,
@@ -159,6 +160,44 @@ groups:
               editorMode: code
               instant: true
               expr: up{job="integrations/unix"}
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+      - uid: ops-centro-host-deadman
+        title: 'Host: heartbeat do receiver ausente há 10m (dead-man''s switch)'
+        condition: B
+        for: 10m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: O receiver do ops-centro não emite heartbeat há 10m
+          description: |-
+            Nenhum incremento de ops_centro_heartbeat_total nos últimos 10m — a EC2 emudeceu (como em 05/08/2026), o container do receiver morreu, ou o OTLP quebrou. O alerta sai pela rota do #25 (Telegram nativo do Grafana Cloud), que não depende da máquina que parou de falar.
+            Ações: (1) conferir se a EC2 responde (ssh/tailscale); (2) `docker ps` no receiver; (3) `docker logs ops-centro-receiver` e o healthz.
+          runbook_url: https://github.com/CidLucas/ops-centro/blob/main/docs/alertas.md
+        labels:
+          severity: critical
+          component: ec2-host
+          app_name: ops-centro
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: ${DS_PROM}
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              expr: sum(increase(ops_centro_heartbeat_total[10m])) or vector(0)
           - refId: B
             datasourceUid: __expr__
             model:

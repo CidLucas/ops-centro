@@ -154,3 +154,35 @@ curl -fsS -X POST http://localhost:8080/alerts/grafana \
 O critério de aceite do #12 é o segundo: o teste do contact point sai do Grafana Cloud e
 volta como `202` no log do receiver. O do #14 é o primeiro trazer os logs do trace no
 corpo da resposta.
+
+## 7. Dead-man's switch (issue #27)
+
+Um alerta normal dispara sobre limiar de métrica (taxa de erro, latência) e pressupõe que a
+série continua chegando. Quando a série **para de existir** — como a EC2 que emudeceu em
+05/08/2026, com `sshd` aceitando TCP sem responder e Tailscale `Online=True` sem handshake —
+nenhuma regra de limiar dispara. O problema só apareceu quando um humano tentou usar a
+máquina, horas depois.
+
+A solução é o dead-man's switch: uma **série contínua** que, quando some ou congela, É o
+alerta.
+
+- **Heartbeat:** o receiver emite `ops_centro_heartbeat_total` (catálogo em
+  `ops_centro/metrics.py`) a cada 30s (env `HEARTBEAT_INTERVAL_SECONDS`) numa task asyncio
+  do lifespan (`ops_centro/receiver/heartbeat.py`). É a única métrica do receiver que
+  existe em regime — as outras só aparecem quando há alerta, e sem série contínua não há
+  NoData para observar.
+- **Regra:** `ops-centro-host-deadman` (grupo `ops-centro-host`) usa
+  `sum(increase(ops_centro_heartbeat_total[10m])) or vector(0)` com `lt 1` e `for: 10m`.
+  Os dois modos de falha do incidente ficam cobertos pela mesma regra:
+  - série **some** (EC2 caiu, receiver morreu, OTLP quebrou) → a query devolve NoData e
+    `no_data="Alerting"` dispara;
+  - série **congela** (receiver vivo mas sem exportar) → `increase[10m] == 0` vira `0 < 1`
+    e dispara igual. O `or vector(0)` existe para isso: sem ele, `sum(increase(...))`
+    sozinho devolveria NoData nos dois casos e o modo "congelou" ficaria cego.
+- **Rota:** a regra carrega `component="ec2-host"` e sai pela rota do #25 — o contact point
+  Telegram **nativo do Grafana Cloud** (`ops-centro-telegram`), que não depende da EC2. Se a
+  máquina que parou de falar é a que o alerta vigia, o aviso tem que nascer fora dela.
+
+**Teste de mesa** (a fazer no deploy, não agora): parar o receiver na EC2
+(`docker compose stop receiver`) e confirmar o alerta no Telegram em menos de 15 min
+(10m de `for` + 10s de `group_wait` + margem); subir de volta e confirmar o "resolvido".

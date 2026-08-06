@@ -396,6 +396,18 @@ CATALOG: tuple[Metric, ...] = (
         description="Linhas na tabela `logs` após a passada de retenção.",
         status=EMITTING,
     ),
+    Metric(
+        name="ops_centro_heartbeat_total",
+        app=APP_OPS_CENTRO,
+        kind=COUNTER,
+        unit="1",
+        labels=(),
+        item=ITEM_SELF,
+        description="Batimento do receiver a cada 30s — a série contínua que torna o "
+        "dead-man's switch possível (issue #27): NoData ou increase=0 por >10m = EC2 "
+        "emudeceu.",
+        status=EMITTING,
+    ),
 )
 
 BY_NAME = {metric.name: metric for metric in CATALOG}
