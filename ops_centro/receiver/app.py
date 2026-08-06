@@ -6,11 +6,14 @@ notificação ao Hermes (`receiver/hermes.py`, issue #15) e, se a evidência jus
 a ação autônoma da RF09 (`receiver/actions.py`, issue #17).
 
 O caminho inverso também passa por aqui: `POST /hermes/consulta` responde as perguntas de
-status vindas do Telegram (`receiver/status.py`, RF08 / issue #16).
+status vindas do Telegram (`receiver/status.py`, RF08 / issues #16 e #19) e
+`POST /hermes/confirmacao` fecha o laço das ações de maior impacto — proposta com botões,
+confirmação humana, execução (`receiver/confirmations.py`, RF10 / issue #18).
 
-Os dois endpoints usam o **mesmo padrão de auth**: token compartilhado em `X-Alert-Token`
+Os três endpoints usam o **mesmo padrão de auth**: token compartilhado em `X-Alert-Token`
 ou `Authorization: Bearer`, comparado com `secrets.compare_digest`, falhando fechado quando
-não há token configurado.
+não há token configurado. No caso da confirmação, esse token só prova que quem chamou é o
+Hermes; **quem** pode confirmar é a allowlist de `chat_id` do `confirmations.py`.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from ops_centro import __version__
 from ops_centro.conventions import APP_OPS_CENTRO, build_resource_attributes
 from ops_centro.metrics import common_labels
 from ops_centro.receiver import actions
+from ops_centro.receiver.confirmations import confirm
 from ops_centro.receiver.enrichment import enrich_alerts, summarize
 from ops_centro.receiver.hermes import notify_alerts
 from ops_centro.receiver.status import run_command
@@ -55,9 +59,30 @@ class GrafanaWebhookPayload(BaseModel):
 
 
 class ConsultaPayload(BaseModel):
-    """Consulta sob demanda vinda do Hermes (RF08, issue #16): o texto cru do Telegram."""
+    """Consulta sob demanda vinda do Hermes (RF08, issue #16): o texto cru do Telegram.
+
+    `chat_id`/`user` só importam para os comandos de ação (#18) — quem pode propor um
+    restart é decidido pelo chat, não pelo texto da mensagem.
+    """
 
     command: str = ""
+    chat_id: str = ""
+    user: str = ""
+
+
+class ConfirmacaoPayload(BaseModel):
+    """Toque num botão inline da proposta (RF10, issue #18).
+
+    O Hermes repassa o `callback_data` do botão como veio; `token`/`decision` existem para
+    quem preferir montar a chamada à mão (é o que a CLI e o `curl` do roteiro fazem).
+    """
+
+    callback_data: str = ""
+    token: str = ""
+    decision: str = ""
+    chat_id: str = ""
+    user: str = ""
+    message_id: int | None = None
 
 
 @asynccontextmanager
@@ -214,9 +239,38 @@ async def hermes_consulta(
     quem digitou errado no Telegram quer a lista de comandos, não um código de erro.
     """
     _require_token(x_alert_token, authorization)
-    resposta = await run_command(payload.command)
+    resposta = await run_command(payload.command, chat_id=payload.chat_id, user=payload.user)
     logger.info(
         "consulta respondida",
         extra={"comando": resposta["command"], "bruto": payload.command[:120]},
     )
     return resposta
+
+
+@app.post("/hermes/confirmacao")
+async def hermes_confirmacao(
+    payload: ConfirmacaoPayload,
+    x_alert_token: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Executa (ou recusa) uma ação proposta, depois do botão no Telegram (RF10, issue #18).
+
+    Sempre **200**, inclusive quando a confirmação é recusada: o corpo traz `status` e o
+    `text` que explica o motivo, e o Hermes só precisa repassar a mensagem ao chat. Um 4xx
+    aqui viraria "o bot não respondeu" na tela de quem apertou o botão — que é a pior
+    resposta possível para quem acabou de pedir um restart e não sabe se ele aconteceu.
+    """
+    _require_token(x_alert_token, authorization)
+    resultado = await confirm(
+        token=payload.token,
+        callback=payload.callback_data,
+        decision=payload.decision,
+        chat_id=payload.chat_id,
+        user=payload.user,
+    )
+    logger.info(
+        "confirmação processada",
+        extra={"status": resultado.status, "action": resultado.action,
+               "target": resultado.target},
+    )
+    return resultado.as_response(payload.message_id)

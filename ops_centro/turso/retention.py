@@ -13,6 +13,12 @@ reincidência; um INFO de 60 dias atrás só ocupa storage:
 Sobrescreva com `TURSO_LOG_RETENTION_DAYS="ERROR=120,WARNING=45,INFO=7"` (ver .env.example);
 o que não aparecer na env var mantém o default acima.
 
+**Só a tabela `logs`.** `action_audit` e `action_confirmations` (issues #17/#18/#19) ficam
+de fora de propósito: a limpeza agressiva existe porque log de INFO envelhece: auditoria de
+ação não. "Quem reiniciou o agents-platform em julho?" é uma pergunta que se faz em
+dezembro, e uma trilha que se apaga sozinha não é trilha. O `PROTECTED_TABLES` abaixo
+existe para deixar isso explícito no código, não só no comentário.
+
 O job apaga em lotes (`--batch`, default 5.000) em vez de um `DELETE` único: transação
 grande no Turso é o caminho mais curto para timeout, e um lote interrompido só significa
 que o próximo dia apaga o resto. `VACUUM` é **opt-in** (`--vacuum`): apagar linha devolve
@@ -60,6 +66,14 @@ DEFAULT_RETENTION_DAYS: dict[str, int] = {
 }
 DEFAULT_FALLBACK_DAYS = 14
 DEFAULT_BATCH = 5_000
+
+# A única tabela que este job apaga.
+MANAGED_TABLE = "logs"
+
+# Tabelas de retenção longa, fora do alcance da limpeza (mitigação §10, issue #19). Não é
+# uma lista que o job consulta — é o contrário: o job só sabe mexer em `logs`, e esta
+# constante é o que um teste usa para provar que continua assim.
+PROTECTED_TABLES = ("action_audit", "action_confirmations", "hermes_dead_letter")
 
 # Rótulo do bucket que pega níveis fora do vocabulário (label da métrica, por isso
 # ASCII e sem espaço).

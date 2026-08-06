@@ -121,6 +121,9 @@ class Notification:
     alerts: tuple[dict[str, Any], ...] = ()
     links: dict[str, str] = field(default_factory=dict)
     suppressed: int = 0
+    # Teclado inline, quando a mensagem pede uma decisão (issue #18). Vazio na esmagadora
+    # maioria das notificações — alerta não tem botão, proposta de ação tem.
+    buttons: tuple[tuple[dict[str, str], ...], ...] = ()
 
     @property
     def group_key(self) -> str:
@@ -150,6 +153,7 @@ class Notification:
             "links": self.links,
             "alerts": list(self.alerts),
             "suppressed": self.suppressed,
+            "buttons": [list(linha) for linha in self.buttons],
         }
 
 

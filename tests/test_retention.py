@@ -168,6 +168,29 @@ def test_purge_e_idempotente(conn):
     assert segunda.total_deleted == 0
 
 
+def test_auditoria_nao_entra_na_limpeza(conn):
+    """Retenção longa da trilha de ações (issue #19): "quem reiniciou isso em julho?" é uma
+    pergunta que se faz em dezembro, e a limpeza agressiva do #9 é só para `logs`."""
+    from ops_centro.turso import audit
+
+    antigo = AGORA - timedelta(days=400)
+    audit.record_action(
+        conn,
+        audit.ActionRecord(
+            action=audit.ACTION_PAUSE_TOOL, target="search", status=audit.STATUS_OK,
+            app_name="agents-platform",
+        ),
+        now=antigo,
+    )
+
+    purge(conn, RetentionPolicy(), now=AGORA)
+
+    assert len(audit.recent_actions(conn)) == 1
+    # E o job continua sabendo mexer numa tabela só — o resto nem é citado no SQL dele.
+    for bucket in RetentionPolicy().buckets(AGORA):
+        assert not any(tabela in bucket.where for tabela in r.PROTECTED_TABLES)
+
+
 def test_relatorio_traz_tamanho_e_fracao_do_teto(conn):
     resultado = purge(conn, RetentionPolicy(), now=AGORA, size_limit_bytes=1_000_000)
     assert resultado.db_bytes and resultado.db_bytes > 0

@@ -1,4 +1,4 @@
-"""Consultas sob demanda vindas do Telegram (RF08, issue #16).
+"""Consultas sob demanda vindas do Telegram (RF08, issues #16 e #19).
 
 "Como estão os agentes hoje?" sem esperar alerta. O Hermes interpreta a mensagem do
 Telegram, chama `POST /hermes/consulta` no receiver (mesmo padrão de token do webhook) e
@@ -9,7 +9,14 @@ Comandos (§2 de docs/hermes.md):
     /status              saúde dos dois apps na última hora
     /status <tenant>     volume e erro de um tenant
     /erros [hoje|1h|30m] contagem e últimas linhas de erro no Turso
+    /acoes               últimas ações do Hermes no audit log (#19)
+    /reiniciar <app>     propõe um restart — precisa de confirmação (#18)
+    /despausar <tool>    propõe desfazer uma pausa — precisa de confirmação (#18)
     /ajuda               esta lista
+
+Os dois últimos são a fronteira deste módulo: **nada aqui executa**. Comando que muda o
+estado do mundo vira uma proposta em `receiver/confirmations.py`, que só age depois de
+alguém apertar o botão. Este arquivo continua sendo só leitura.
 
 **Limite de custo é regra, não recomendação** (tarefa da issue): toda pergunta vira um
 conjunto **fechado** de queries agregadas — três séries por app no Mimir e duas agregações
@@ -44,7 +51,19 @@ from ops_centro.conventions import (
     ATTR_TENANT_ID,
     ENV_DEV,
 )
+from ops_centro.receiver.confirmations import propose
 from ops_centro.receiver.hermes import escape_md
+from ops_centro.turso.audit import (
+    ACTION_RESTART_SERVICE,
+    ACTION_RESUME_TOOL,
+    STATUS_BLOCKED,
+    STATUS_CANCELLED,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_PROPOSED,
+    ActionRecord,
+    recent_actions,
+)
 from ops_centro.turso.connection import connect, is_configured
 from ops_centro.turso.log_reader import error_counts, recent_errors
 
@@ -52,11 +71,21 @@ logger = logging.getLogger(__name__)
 
 CMD_STATUS = "status"
 CMD_ERROS = "erros"
+CMD_ACOES = "acoes"
+CMD_REINICIAR = "reiniciar"
+CMD_DESPAUSAR = "despausar"
 CMD_AJUDA = "ajuda"
+
+# Comandos que não leem nada: propõem uma ação e devolvem botões (#18).
+CMD_TO_ACTION = {
+    CMD_REINICIAR: ACTION_RESTART_SERVICE,
+    CMD_DESPAUSAR: ACTION_RESUME_TOOL,
+}
 
 DEFAULT_WINDOW = "1h"
 DEFAULT_TIMEOUT_SECONDS = 8.0
 MAX_ERROR_LINES = 5
+MAX_ACTION_LINES = 10
 
 # Apelidos de janela aceitos no `/erros` — "hoje" é como se pergunta, não "24h".
 WINDOW_ALIASES = {"hoje": "24h", "agora": "15m", "semana": "7d"}
@@ -65,8 +94,20 @@ AJUDA = (
     "/status — saúde dos dois apps na última hora\n"
     "/status <tenant> — volume e erro de um tenant\n"
     "/erros [hoje|1h|30m] — contagem e últimas linhas de erro\n"
+    "/acoes — últimas ações do Hermes (audit log)\n"
+    "/reiniciar <app> — propõe reiniciar um app (pede confirmação)\n"
+    "/despausar <tool> — propõe desfazer uma pausa (pede confirmação)\n"
     "/ajuda — esta lista"
 )
+
+# Desfecho de uma ação em uma olhada — o `/acoes` é para ler no celular, em pé.
+ACTION_EMOJI = {
+    STATUS_OK: "✅",
+    STATUS_ERROR: "⚠️",
+    STATUS_BLOCKED: "🚫",
+    STATUS_PROPOSED: "⏳",
+    STATUS_CANCELLED: "✖️",
+}
 
 
 # --- comandos ---------------------------------------------------------------------
@@ -80,7 +121,23 @@ class Command:
 
     @property
     def known(self) -> bool:
-        return self.name in (CMD_STATUS, CMD_ERROS)
+        return self.name != CMD_AJUDA
+
+    @property
+    def proposes_action(self) -> bool:
+        """Comando que muda o estado do mundo — vai para o fluxo de confirmação (#18)."""
+        return self.name in CMD_TO_ACTION
+
+
+# Sinônimos aceitos por comando. A lista existe porque quem digita no Telegram digita como
+# fala: `/saude`, `/acoes`, `/ações` e `/auditoria` são a mesma pergunta.
+ALIASES = {
+    CMD_STATUS: ("status", "saude", "saúde"),
+    CMD_ERROS: ("erros", "erro", "errors"),
+    CMD_ACOES: ("acoes", "ações", "acao", "ação", "auditoria"),
+    CMD_REINICIAR: ("reiniciar", "restart"),
+    CMD_DESPAUSAR: ("despausar", "retomar", "resume"),
+}
 
 
 def parse_command(texto: str) -> Command:
@@ -96,10 +153,9 @@ def parse_command(texto: str) -> Command:
     partes = bruto.split()
     nome = partes[0].lstrip("/").split("@")[0].lower()
     argumento = " ".join(partes[1:]).strip()
-    if nome in ("status", "saude", "saúde"):
-        return Command(CMD_STATUS, argumento, bruto)
-    if nome in ("erros", "erro", "errors"):
-        return Command(CMD_ERROS, argumento, bruto)
+    for comando, apelidos in ALIASES.items():
+        if nome in apelidos:
+            return Command(comando, argumento, bruto)
     return Command(CMD_AJUDA, argumento, bruto)
 
 
@@ -238,6 +294,30 @@ class ErrorSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionSummary:
+    """Últimas linhas de `action_audit` — o histórico que o `/acoes` responde (#19)."""
+
+    records: tuple[ActionRecord, ...] = ()
+    detail: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "total": len(self.records),
+            "actions": [registro.as_dict() for registro in self.records],
+            "detail": self.detail,
+        }
+
+    @staticmethod
+    def line(registro: ActionRecord) -> str:
+        """Uma ação por linha: quando, desfecho, o quê, em quem e por ordem de quem."""
+        quando = (registro.created_at or "")[5:16].replace("T", " ")
+        emoji = ACTION_EMOJI.get(registro.status, "•")
+        motivo = registro.detail or registro.reason or registro.triggered_by
+        cabeca = f"{emoji} {quando} {registro.action} {registro.target} · {registro.actor}"
+        return f"{cabeca}\n    {motivo}" if motivo else cabeca
+
+
+@dataclass(frozen=True, slots=True)
 class StatusReport:
     """Resposta completa de um comando."""
 
@@ -245,6 +325,7 @@ class StatusReport:
     window: str
     apps: tuple[AppHealth, ...] = ()
     errors: ErrorSummary | None = None
+    actions: ActionSummary | None = None
     tenant: str | None = None
     notes: tuple[str, ...] = ()
     generated_at: str = field(
@@ -258,12 +339,26 @@ class StatusReport:
             "tenant": self.tenant,
             "apps": [app.as_dict() for app in self.apps],
             "errors": self.errors.as_dict() if self.errors else None,
+            "actions": self.actions.as_dict() if self.actions else None,
             "notes": list(self.notes),
             "generated_at": self.generated_at,
         }
 
+    def _actions_markdown(self) -> list[str]:
+        resumo = self.actions
+        if resumo is None:
+            return []
+        if not resumo.records:
+            return [escape_md(f"🗂 {resumo.detail or 'Nenhuma ação registrada ainda.'}")]
+        return [
+            f"🗂 *{escape_md(f'Últimas {len(resumo.records)} ações')}*",
+            *(escape_md(ActionSummary.line(registro)) for registro in resumo.records),
+        ]
+
     def as_markdown(self) -> str:
         """A resposta em MarkdownV2, pronta para o `sendMessage` do Hermes."""
+        if self.command == CMD_ACOES:
+            return "\n".join(self._actions_markdown())
         titulo = f"Status · últimas {self.window}" + (f" · tenant {self.tenant}" if self.tenant else "")
         partes = [f"📊 *{escape_md(titulo)}*"]
         partes += [escape_md(app.line()) for app in self.apps]
@@ -345,6 +440,23 @@ def collect_errors(
             logger.debug("erro ao fechar a conexão da consulta: %s", exc)
 
 
+def collect_actions(connect_fn: Callable[[], Any], *, limit: int = MAX_ACTION_LINES) -> ActionSummary:
+    """Últimas ações auditadas (bloqueante — mesma thread da coleta).
+
+    Sem janela de tempo, ao contrário de `/erros`: auditoria tem retenção longa (#19) e a
+    pergunta que se faz é "o que o Hermes andou fazendo", não "o que aconteceu na última
+    hora". O `LIMIT` é o que segura o custo.
+    """
+    conn = connect_fn()
+    try:
+        return ActionSummary(tuple(recent_actions(conn, limit=limit)))
+    finally:
+        try:
+            conn.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("erro ao fechar a conexão da consulta: %s", exc)
+
+
 def _collect(
     command: Command,
     cloud: Any,
@@ -374,9 +486,20 @@ def _collect(
                 logger.warning("consulta de erros no Turso falhou: %s", exc)
                 erros = ErrorSummary(detail=f"Turso indisponível: {exc}")
 
+    acoes: ActionSummary | None = None
+    if command.name == CMD_ACOES:
+        if connect_fn is None:
+            acoes = ActionSummary(detail="Turso não configurado — o audit das ações vive lá")
+        else:
+            try:
+                acoes = collect_actions(connect_fn)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("consulta do audit no Turso falhou: %s", exc)
+                acoes = ActionSummary(detail=f"Turso indisponível: {exc}")
+
     return StatusReport(
-        command=command.name, window=window, apps=saudes, errors=erros, tenant=tenant,
-        notes=tuple(notas),
+        command=command.name, window=window, apps=saudes, errors=erros, actions=acoes,
+        tenant=tenant, notes=tuple(notas),
     )
 
 
@@ -387,11 +510,14 @@ async def run_command(
     connect_fn: Callable[[], Any] | None = None,
     timeout: float | None = None,
     apps: Sequence[str] = (APP_AGENTS_PLATFORM, APP_FILE_MEMORY),
+    chat_id: str = "",
+    user: str = "",
 ) -> dict[str, Any]:
     """Interpreta e responde um comando. **Nunca levanta.**
 
     Devolve o dicionário que o Hermes consome: `text` em MarkdownV2 (pronto para o
-    Telegram) e `data` estruturado (para ele decidir o que fazer de diferente).
+    Telegram) e `data` estruturado (para ele decidir o que fazer de diferente). Comandos
+    de ação (#18) trazem também `buttons` — e não executam nada por si.
     """
     comando = parse_command(texto)
     if comando.name == CMD_AJUDA:
@@ -401,6 +527,13 @@ async def run_command(
             "parse_mode": "MarkdownV2",
             "data": {"commands": AJUDA.splitlines()},
         }
+
+    if comando.proposes_action:
+        proposta = await propose(
+            CMD_TO_ACTION[comando.name], comando.argument.strip(),
+            user=user, chat_id=chat_id, connect_fn=connect_fn,
+        )
+        return {**proposta.as_response(), "command": comando.name}
 
     janela = resolve_window(
         comando.argument if comando.name == CMD_ERROS else "",
@@ -455,16 +588,20 @@ def _timeout_from_env() -> float:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    parser = argparse.ArgumentParser(description="Consultas sob demanda (RF08, issue #16)")
+    parser = argparse.ArgumentParser(description="Consultas sob demanda (RF08, issues #16/#19)")
     parser.add_argument("comando", nargs="?", default="/status", help="ex: '/status acme'")
+    parser.add_argument("--chat", default="", help="chat_id do Telegram (comandos de ação, #18)")
+    parser.add_argument("--user", default="cli", help="quem está perguntando")
     parser.add_argument("--json", action="store_true", help="saída JSON (o que o Hermes recebe)")
     args = parser.parse_args(argv)
 
-    resposta = asyncio.run(run_command(args.comando))
+    resposta = asyncio.run(run_command(args.comando, chat_id=args.chat, user=args.user))
     if args.json:
         print(json.dumps(resposta, ensure_ascii=False, indent=2))
     else:
         print(resposta["text"])
+        for linha in resposta.get("buttons") or []:
+            print("  [" + "] [".join(botao["text"] for botao in linha) + "]")
     return 0
 
 

@@ -40,7 +40,8 @@ formatos (`X-Hermes-Token` e `Authorization: Bearer`) — o mesmo padrão do sal
   "environment": "prod",
   "links": {"dashboard": "…", "trace": "…", "runbook": "…"},
   "alerts": [ { …payload enriquecido do #14… } ],
-  "suppressed": 0                        // notificações seguradas pelo rate limit
+  "suppressed": 0,                       // notificações seguradas pelo rate limit
+  "buttons": []                          // teclado inline, só em proposta de ação (#18)
 }
 ```
 
@@ -93,7 +94,10 @@ Repo [hermes-dash](https://github.com/CidLucas), não este. O handler precisa de
 2. `sendMessage` com `chat_id` do canal, `text` e `parse_mode` vindos do payload;
 3. resposta 2xx **depois** de aceitar (não depois de o Telegram confirmar) — o retry daqui
    é para indisponibilidade dele, não para lentidão da API do Telegram;
-4. para `kind: "action"` (#17), o mesmo caminho: a mensagem já explica o que foi feito.
+4. para `kind: "action"` (#17), o mesmo caminho: a mensagem já explica o que foi feito;
+5. quando vier `buttons` (#18), montar o `reply_markup.inline_keyboard` com ele e devolver o
+   `callback_data` do botão tocado ao `POST /hermes/confirmacao` — ver
+   [acoes-confirmadas.md §3](acoes-confirmadas.md#3-o-que-o-hermes-precisa-fazer).
 
 ## 2. Consultas sob demanda (#16)
 
@@ -106,11 +110,22 @@ configurado). Corpo: `{"command": "/status acme"}` — o texto cru que chegou no
 | `/status` | volume, % de erro e p95 dos dois apps na última hora | Mimir (3 queries por app) + Turso (erros) |
 | `/status <tenant>` | volume e % de erro do tenant | counters de volume por tenant |
 | `/erros [hoje\|1h\|30m]` | contagem por app/nível + últimas 5 linhas | Turso |
+| `/acoes` | as 10 últimas ações do Hermes, com desfecho e motivo (#19) | `action_audit` no Turso |
+| `/reiniciar <app>` | **proposta** de restart com botões (#18) | — (não executa nada) |
+| `/despausar <tool>` | **proposta** de desfazer uma pausa (#18) | pausa vigente em `action_audit` |
 | `/ajuda` | a lista acima | — |
 
-Resposta: `{"command", "text" (MarkdownV2), "parse_mode", "data"}`. Comando desconhecido
-devolve **200 com a ajuda** — quem digitou errado no Telegram quer a lista de comandos, não
-um código de erro.
+Resposta: `{"command", "text" (MarkdownV2), "parse_mode", "data"}` — mais `buttons` nos dois
+comandos de ação. Comando desconhecido devolve **200 com a ajuda** — quem digitou errado no
+Telegram quer a lista de comandos, não um código de erro.
+
+Os apelidos são os que se digitam de verdade: `/saude`, `/ações`, `/auditoria`, `/restart`,
+`/retomar` caem nos comandos acima.
+
+**Nada nesta rota executa.** `/reiniciar` e `/despausar` devolvem uma proposta com token de
+uso único; quem executa é o `POST /hermes/confirmacao`, depois do botão — ver
+[acoes-confirmadas.md](acoes-confirmadas.md). O corpo da consulta ganhou `chat_id` e `user`
+por causa disso: quem pode propor é decidido pelo chat, não pelo texto da mensagem.
 
 **Limite de custo (tarefa da issue).** Toda pergunta vira um conjunto fechado de queries
 agregadas: `sum(increase(...))`, `histogram_quantile(0.95, sum by (le) ...)` e duas
@@ -133,6 +148,7 @@ make hermes-sample    # envelope de exemplo + mensagem renderizada
 make hermes-send      # manda a notificação sintética ao HERMES_WEBHOOK_URL
 make status           # responde '/status' localmente, como o Hermes veria
 make erros            # '/erros hoje'
+make acoes            # '/acoes' — histórico do audit log (#19)
 ```
 
 Configuração em [`.env.example`](../.env.example) (seções "Hermes / Telegram" e "Consultas

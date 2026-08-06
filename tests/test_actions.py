@@ -60,7 +60,7 @@ def semear_falhas(banco, quantidade, *, tool="search", app="agents-platform", ni
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
             (
-                audit._iso(AGORA), app, "acme", TRACE, nivel,
+                audit.iso(AGORA), app, "acme", TRACE, nivel,
                 f"tool {tool}: upstream timeout", '{"tool": "%s"}' % tool,
             )
             for _ in range(quantidade)
@@ -197,7 +197,7 @@ async def test_tool_com_falha_recorrente_e_pausada_e_anunciada(conectar, banco, 
         audit.ACTION_PAUSE_TOOL, "search", audit.STATUS_OK
     )
     assert registro.trace_id == TRACE and "7 falha" in registro.triggered_by
-    assert registro.expires_at > audit._iso(AGORA)
+    assert registro.expires_at > audit.iso(AGORA)
     # 3. o Telegram foi avisado do quê e do porquê
     texto = notificacoes[0].text
     assert "search" in texto and "7 falhas" in texto

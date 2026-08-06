@@ -75,8 +75,10 @@ o contact point sem commitar o token.
 | `STATUS_QUERY_TIMEOUT` | Consultas sob demanda (default 8s, issue #16) | idem |
 | `AUTONOMOUS_ACTIONS` | Kill switch das ações autônomas (issue #17) | `.env` EC2 — não é segredo, mas é a alavanca de emergência |
 | `AUTONOMOUS_PAUSE_THRESHOLD` / `_WINDOW_MINUTES` / `_TTL_SECONDS` | Regra de decisão da pausa (defaults 5 / 30min / 900s) | idem |
-| `ADMIN_API_AGENTS_PLATFORM_URL` / `ADMIN_API_FILE_MEMORY_URL` | Endpoint admin de pause/resume de tool nos apps | `.env` EC2 — não é segredo |
+| `ADMIN_API_AGENTS_PLATFORM_URL` / `ADMIN_API_FILE_MEMORY_URL` | Endpoint admin de pause/resume de tool e restart nos apps | `.env` EC2 — não é segredo |
 | `ADMIN_API_TOKEN` | Auth do receiver no `admin_api` dos apps | SSM `/ops-centro/prod/` → `.env` da EC2; o mesmo valor nos apps |
+| `HERMES_ALLOWED_CHAT_IDS` | Quem pode propor/confirmar ações de impacto (issue #18) | `.env` EC2 — não é segredo, mas **vazio = ninguém**; é o controle de acesso do `/reiniciar` |
+| `CONFIRMATION_TTL_SECONDS` | Validade do token de confirmação (default 600s) | idem |
 
 Na EC2 nenhum destes é digitado à mão: `deploy/env-from-ssm.sh` monta o `.env` (modo 600) a
 partir do **AWS SSM Parameter Store** (`/ops-centro/prod/*`, os segredos como

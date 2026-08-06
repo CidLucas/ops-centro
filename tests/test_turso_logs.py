@@ -55,12 +55,14 @@ def rows(db_path):
 def test_migration_cria_tabela_e_e_idempotente(db_path):
     conn = libsql.connect(database=db_path)
     # A ordem é a do nome do arquivo: 0002 é o índice de suporte à retenção (issue #9),
-    # 0003 o dead-letter do Hermes (#15) e 0004 o audit de ações (#17/#19).
+    # 0003 o dead-letter do Hermes (#15), 0004 o audit de ações (#17/#19) e 0005 os tokens
+    # de confirmação (#18).
     assert apply_migrations(conn) == [
         "0001_create_logs",
         "0002_logs_retention",
         "0003_hermes_dead_letter",
         "0004_actions_audit",
+        "0005_action_confirmations",
     ]
     assert apply_migrations(conn) == []  # segunda passada não reaplica
 

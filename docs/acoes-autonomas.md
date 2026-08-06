@@ -102,27 +102,63 @@ Motivo: 7 falhas em 30min (limiar 5)
 Evidência: 7 falhas no Turso.
 Gatilho: Agents Platform: taxa de erro por tool MCP acima de 10% · 7 falha(s)/30min
 Despausa automática em 2026-07-24T07:06:10+00:00.
-Desligue com AUTONOMOUS_ACTIONS=off; reverta com /despausar (issue #18).
+Desligue com AUTONOMOUS_ACTIONS=off; reverta agora com /despausar search (pede confirmação).
 ```
 
 No vencimento: `▶️ Tool despausada: search`. Falha ao despausar vira `⚠️` — pausa que
 deveria ter terminado e não terminou é informação operacional, não silêncio.
 
-## 6. Auditoria (base da issue #19)
+## 6. Auditoria de todas as ações (issue #19)
+
+Uma tabela para as duas famílias de ação: a autônoma daqui e a
+[confirmada do #18](acoes-confirmadas.md). Mitigação §10 do plano — "logar todas as ações
+tomadas" — e a resposta de investigação quando alguma delas der errado.
 
 Tabela `action_audit`: `created_at`, `actor`, `action`, `target`, `app_name`, `tenant_id`,
 `trace_id`, `triggered_by`, `reason`, `ttl_seconds`, `expires_at`, `status`, `detail`.
 
-`status` no vocabulário do schema, mais um: `ok` | `error` | `bloqueado` — bloqueado **não
-é falha**, é o kill switch, o cooldown ou a falta de endpoint fazendo o seu trabalho.
+| Coluna | Por que ela existe |
+| --- | --- |
+| `actor` | `ops-centro` (autônoma) ou `telegram:<user>` (confirmada) — a diferença entre "o sistema decidiu" e "alguém decidiu" |
+| `triggered_by` | o gatilho: alertname + contagem de falhas, ou o chat que pediu |
+| `trace_id` | liga a ação ao alerta que a motivou e aos logs daquela execução (RF05) |
+| `expires_at` | quando a pausa vence — é por ela que o despausar sobrevive a um restart |
+| `status` | `ok` \| `error` \| `bloqueado` \| `proposto` \| `cancelado` |
 
-`actor` é `ops-centro` para ação autônoma; a #18 grava `telegram:<user>` na mesma tabela.
-Retenção longa de propósito, fora da limpeza do #9: auditoria antiga ainda responde "quem
-pausou essa tool em julho?".
+`bloqueado`, `proposto` e `cancelado` **não são falha**: são o kill switch, o cooldown, a
+falta de endpoint, uma confirmação recusada ou uma proposta esperando o botão. Tratá-los
+como erro faria o painel gritar exatamente quando as travas funcionaram.
+
+**Escrita em todo caminho.** Nenhuma ação chega ao `admin_api` sem passar por aqui antes ou
+depois: `pause`/`resume` autônomos ([§2](#2-as-três-travas)), proposta, confirmação,
+cancelamento e recusa ([#18](acoes-confirmadas.md#6-auditoria)). Quando o Turso está fora, a
+linha vai para o log em nível ERROR — degradação prevista, com rastro.
+
+**Retenção longa, fora da limpeza do #9.** O job de retenção (`turso/retention.py`) só
+apaga da tabela `logs`; `action_audit` e `action_confirmations` estão em `PROTECTED_TABLES`
+e um teste trava isso. Log de INFO envelhece, auditoria de ação não: "quem reiniciou o
+agents-platform em julho?" é uma pergunta que se faz em dezembro.
+
+### Como consultar
 
 ```bash
+/acoes                # no Telegram: as 10 últimas ações, legíveis no celular (#19)
+make acoes            # o mesmo, por linha de comando
 make actions-status   # kill switch, pausas vencidas e as 10 últimas ações
 make actions-sweep    # despausa agora tudo que já venceu
+make confirm-pending  # propostas aguardando confirmação (#18)
+```
+
+O `/acoes` responde uma linha por ação — desfecho, o quê, em quem, por ordem de quem:
+
+```
+🗂 Últimas 3 ações
+⏳ 07-24 07:14 restart_service agents-platform · telegram:lucas
+    aguardando confirmação
+✅ 07-24 07:06 pause_tool search · ops-centro
+    HTTP 200
+🚫 07-24 06:58 pause_tool fetch · ops-centro
+    kill switch ligado (AUTONOMOUS_ACTIONS=off)
 ```
 
 ## 7. Simulação (o critério de aceite)

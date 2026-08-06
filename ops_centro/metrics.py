@@ -345,6 +345,18 @@ CATALOG: tuple[Metric, ...] = (
         status=EMITTING,
     ),
     Metric(
+        name="ops_centro_confirmed_actions_total",
+        app=APP_OPS_CENTRO,
+        kind=COUNTER,
+        unit="1",
+        labels=("status",),
+        item=ITEM_SELF,
+        description="Ações com confirmação humana, por desfecho (RF10, issue #18). "
+        "`proposto` = esperando o botão; `bloqueado` = chat não autorizado, token vencido "
+        "ou já usado — cada um deles é a mitigação §10 funcionando, não uma falha.",
+        status=EMITTING,
+    ),
+    Metric(
         name="ops_centro_log_retention_deleted_total",
         app=APP_OPS_CENTRO,
         kind=COUNTER,

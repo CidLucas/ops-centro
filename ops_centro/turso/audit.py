@@ -22,17 +22,29 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Quem agiu. Ação autônoma é do próprio ops-centro; a #18 vai gravar `telegram:<user>`.
+# Quem agiu. Ação autônoma é do próprio ops-centro; a confirmada (#18) grava quem apertou
+# o botão no Telegram.
 ACTOR_AUTONOMOUS = "ops-centro"
+ACTOR_TELEGRAM_PREFIX = "telegram:"
 
 ACTION_PAUSE_TOOL = "pause_tool"
 ACTION_RESUME_TOOL = "resume_tool"
+ACTION_RESTART_SERVICE = "restart_service"
 
-# Desfecho, no mesmo vocabulário ok|error do schema, mais `bloqueado` — que não é falha:
-# é o kill switch, o cooldown ou a falta de endpoint admin fazendo o seu trabalho.
+# Desfecho, no mesmo vocabulário ok|error do schema, mais três que não são falha:
+# `bloqueado`  — kill switch, cooldown, falta de endpoint admin ou confirmação recusada;
+# `proposto`   — a ação foi oferecida e espera o humano (#18);
+# `cancelado`  — o humano disse não (ou deixou vencer).
 STATUS_OK = "ok"
 STATUS_ERROR = "error"
 STATUS_BLOCKED = "bloqueado"
+STATUS_PROPOSED = "proposto"
+STATUS_CANCELLED = "cancelado"
+
+
+def telegram_actor(user: str | None) -> str:
+    """`telegram:<user>` — o `actor` de tudo que passou por confirmação humana."""
+    return f"{ACTOR_TELEGRAM_PREFIX}{(user or 'desconhecido').strip() or 'desconhecido'}"
 
 COLUMNS = (
     "id, created_at, actor, action, target, app_name, tenant_id, trace_id, triggered_by, "
@@ -44,7 +56,7 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _iso(momento: datetime) -> str:
+def iso(momento: datetime) -> str:
     """Mesmo formato do writer de logs — comparação de timestamp como texto só é correta
     porque todo mundo grava UTC com a mesma precisão."""
     return momento.isoformat(timespec="milliseconds")
@@ -103,12 +115,12 @@ class ActionRecord:
 
 def expires_at(ttl_seconds: int, now: datetime | None = None) -> str:
     """Instante em que uma pausa com esse TTL vence."""
-    return _iso((now or utcnow()) + timedelta(seconds=ttl_seconds))
+    return iso((now or utcnow()) + timedelta(seconds=ttl_seconds))
 
 
 def record_action(conn: Any, record: ActionRecord, now: datetime | None = None) -> ActionRecord:
     """Grava a ação e devolve o registro com `id`/`created_at` preenchidos."""
-    criado = record.created_at or _iso(now or utcnow())
+    criado = record.created_at or iso(now or utcnow())
     cursor = conn.execute(
         "INSERT INTO action_audit "
         "(created_at, actor, action, target, app_name, tenant_id, trace_id, triggered_by, "
@@ -141,7 +153,7 @@ def active_pause(conn: Any, target: str, now: datetime | None = None) -> ActionR
         "WHERE p.action = ? AND p.status = ? AND p.target = ? AND p.expires_at > ? "
         f"AND {_SEM_RESUME_DEPOIS} ORDER BY p.created_at DESC LIMIT 1",
         (
-            ACTION_PAUSE_TOOL, STATUS_OK, target, _iso(now or utcnow()),
+            ACTION_PAUSE_TOOL, STATUS_OK, target, iso(now or utcnow()),
             ACTION_RESUME_TOOL, STATUS_OK,
         ),
     ).fetchone()
@@ -155,7 +167,7 @@ def expired_pauses(conn: Any, now: datetime | None = None, limit: int = 20) -> l
         "WHERE p.action = ? AND p.status = ? AND p.expires_at IS NOT NULL AND p.expires_at <= ? "
         f"AND {_SEM_RESUME_DEPOIS} ORDER BY p.expires_at LIMIT ?",
         (
-            ACTION_PAUSE_TOOL, STATUS_OK, _iso(now or utcnow()),
+            ACTION_PAUSE_TOOL, STATUS_OK, iso(now or utcnow()),
             ACTION_RESUME_TOOL, STATUS_OK, limit,
         ),
     ).fetchall()

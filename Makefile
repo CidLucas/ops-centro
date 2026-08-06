@@ -78,7 +78,8 @@ alerts-apply: ## Publica regras, contact point e roteamento no Grafana Cloud
 	uv run python -m ops_centro.grafana.alerts --apply
 
 # ------------------------------------------------------- hermes / ações -----
-.PHONY: hermes-sample hermes-send status erros actions-status actions-sweep
+.PHONY: hermes-sample hermes-send status erros acoes actions-status actions-sweep
+.PHONY: confirm-pending confirm-propose
 hermes-sample: ## Imprime o envelope receiver→Hermes de exemplo (issue #15)
 	uv run python -m ops_centro.receiver.hermes --sample
 
@@ -91,11 +92,20 @@ status: ## Responde '/status' localmente, como o Hermes veria (issue #16)
 erros: ## Responde '/erros hoje' localmente
 	uv run python -m ops_centro.receiver.status "/erros hoje"
 
+acoes: ## Responde '/acoes' — histórico do audit log (issue #19)
+	uv run python -m ops_centro.receiver.status "/acoes"
+
 actions-status: ## Últimas ações autônomas e pausas vencidas (issue #17)
 	uv run python -m ops_centro.receiver.actions --status
 
 actions-sweep: ## Despausa agora tudo que já venceu o TTL
 	uv run python -m ops_centro.receiver.actions --sweep
+
+confirm-pending: ## Propostas aguardando confirmação e chats autorizados (issue #18)
+	uv run python -m ops_centro.receiver.confirmations --pending
+
+confirm-propose: ## Propõe uma ação: make confirm-propose ACAO='restart_service agents-platform'
+	uv run python -m ops_centro.receiver.confirmations --propose "$(ACAO)"
 
 # ---------------------------------------------------------- validação -------
 .PHONY: validate validate-json

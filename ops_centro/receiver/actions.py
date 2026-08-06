@@ -257,7 +257,7 @@ async def decide(
 
 
 # --- cliente do admin_api dos apps -------------------------------------------------------
-async def _admin_call(
+async def admin_call(
     app_name: str | None,
     caminho: str,
     corpo: dict[str, Any],
@@ -305,7 +305,7 @@ def _record(status: str) -> None:
 
 
 # --- auditoria (sempre, inclusive quando bloqueia) -----------------------------------------
-async def _audit(
+async def write_audit(
     record: ActionRecord, *, connect_fn: Callable[[], Any] | None = None
 ) -> ActionRecord:
     """Grava a linha de auditoria. **Nunca levanta** — mas loga alto se não conseguir:
@@ -355,7 +355,8 @@ def _pause_message(record: ActionRecord, decision: Decision | None = None) -> st
             *evidencia,
             escape_md(f"Gatilho: {record.triggered_by}"),
             escape_md(f"Despausa automática em {record.expires_at}."),
-            escape_md("Desligue com AUTONOMOUS_ACTIONS=off; reverta com /despausar (issue #18)."),
+            escape_md("Desligue com AUTONOMOUS_ACTIONS=off; reverta agora com /despausar "
+                      f"{record.target} (pede confirmação)."),
         ]
     )
 
@@ -433,25 +434,25 @@ async def pause_tool(
     )
 
     if not actions_enabled():
-        registro = await _audit(replace(base, detail=BLOCK_KILL_SWITCH), connect_fn=connect_fn)
+        registro = await write_audit(replace(base, detail=BLOCK_KILL_SWITCH), connect_fn=connect_fn)
         _record(STATUS_BLOCKED)
         logger.warning("ação autônoma bloqueada: %s", BLOCK_KILL_SWITCH)
         return ActionResult(STATUS_BLOCKED, ACTION_PAUSE_TOOL, decision.tool, BLOCK_KILL_SWITCH,
                             registro)
 
-    ok, detalhe = await _admin_call(
+    ok, detalhe = await admin_call(
         decision.app_name,
         "/admin/tools/pause",
         {"tool_name": decision.tool, "ttl_seconds": ttl, "reason": decision.reason},
         client=client,
     )
     if not ok and detalhe == BLOCK_NO_ADMIN:
-        registro = await _audit(replace(base, detail=detalhe), connect_fn=connect_fn)
+        registro = await write_audit(replace(base, detail=detalhe), connect_fn=connect_fn)
         _record(STATUS_BLOCKED)
         return ActionResult(STATUS_BLOCKED, ACTION_PAUSE_TOOL, decision.tool, detalhe, registro)
 
     status = STATUS_OK if ok else STATUS_ERROR
-    registro = await _audit(replace(base, status=status, detail=detalhe), connect_fn=connect_fn)
+    registro = await write_audit(replace(base, status=status, detail=detalhe), connect_fn=connect_fn)
     _record(status)
     if notify:
         await _notify(registro, _pause_message(registro, decision), **(notify_kwargs or {}))
@@ -472,10 +473,10 @@ async def resume_tool(
     tentaria de novo para sempre — e, pior, ninguém saberia que a tool ficou pausada além
     do TTL prometido.
     """
-    ok, detalhe = await _admin_call(
+    ok, detalhe = await admin_call(
         pausa.app_name, "/admin/tools/resume", {"tool_name": pausa.target}, client=client
     )
-    registro = await _audit(
+    registro = await write_audit(
         ActionRecord(
             action=ACTION_RESUME_TOOL, target=pausa.target,
             status=STATUS_OK if ok else STATUS_ERROR, actor=ACTOR_AUTONOMOUS,

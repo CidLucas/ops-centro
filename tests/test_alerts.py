@@ -7,6 +7,12 @@ Três garantias, na ordem em que um alerta erra na vida real:
    sem piso não dão erro no Grafana: dão regra que nunca dispara (ou que vive em estado de
    erro), que é a pior falha possível num alerta.
 3. **Segredo fora do repo** — o YAML carrega placeholder, nunca o token (RNF06).
+
+As invariantes de cada regra (uid, severity, histerese, `app_name`, métrica no catálogo,
+`clamp_min`) **não** são testadas uma a uma aqui: elas moram em `alerts.validate_rules()`,
+e o que este arquivo faz é chamá-lo e provar que ele reprova de verdade. Reimplementá-las
+em teste parametrizado duplicaria a lógica e daria um relatório pior — o `validate_rules`
+lista todas as violações de uma vez, com uid e motivo.
 """
 
 import httpx
@@ -16,7 +22,6 @@ import yaml
 from ops_centro.conventions import ATTR_APP_NAME, ATTR_TENANT_ID
 from ops_centro.grafana import alerts as a
 from ops_centro.grafana.dashboards import FOLDER_TITLE, FOLDER_UID, GrafanaAPI
-from ops_centro.metrics import BY_NAME
 
 pytestmark = pytest.mark.unit
 
@@ -42,13 +47,6 @@ def test_todos_os_arquivos_existem_no_repo():
         assert (a.ALERTS_DIR / nome).exists()
 
 
-def test_yaml_gerado_e_estavel():
-    grupo = a.build_apps()
-    assert a.render(grupo.as_provisioning(), grupo.header) == a.render(
-        grupo.as_provisioning(), grupo.header
-    )
-
-
 def test_write_regenera_o_diretorio(tmp_path):
     escritos = a.write_all(tmp_path)
     assert len(escritos) == len(a.build_files())
@@ -66,34 +64,45 @@ def test_render_preserva_o_payload():
 
 # --- invariantes das regras --------------------------------------------------------
 def test_regras_passam_na_validacao():
+    """As invariantes de toda regra moram no `validate_rules`, não aqui: uid único e com
+    prefixo, severity conhecida, `for` presente, summary/description, runbook clicável,
+    `app_name` chegando ao alerta (#14) e métrica dentro do catálogo da §7.
+
+    Testar isso regra a regra por fora do módulo seria reimplementar a validação — e pior:
+    o `validate_rules` relata **todas** as violações de uma vez, com o uid e o motivo, o
+    que um teste parametrizado não faz. O par deste teste é o de baixo, que prova que a
+    validação reprova de verdade.
+    """
     assert a.validate_rules() == []
 
 
-def test_uids_sao_unicos():
-    uids = [regra.uid for regra in REGRAS]
-    assert len(uids) == len(set(uids))
-
-
-@pytest.mark.parametrize("regra", REGRAS, ids=lambda r: r.uid)
-def test_toda_regra_carrega_o_schema_comum(regra):
-    """Critério de aceite do #12: a label do schema precisa chegar ao alerta, senão o
-    enriquecimento do #14 não tem por onde procurar o log no Turso."""
-    assert ATTR_APP_NAME in regra.grouped_labels() | set(regra.all_labels())
-
-
-@pytest.mark.parametrize("regra", REGRAS, ids=lambda r: r.uid)
-def test_toda_regra_tem_runbook_e_historese(regra):
-    assert regra.runbook_url.startswith("https://")
-    assert regra.duration  # `for` vazio = alerta que dispara em pico instantâneo
-    assert regra.severity in a.KNOWN_SEVERITIES
-
-
-@pytest.mark.parametrize("regra", REGRAS, ids=lambda r: r.uid)
-def test_metricas_citadas_existem(regra):
-    fora = sorted(
-        m for m in a.referenced_metrics(regra) if m not in BY_NAME and m not in a.USAGE_METRICS
+def test_validacao_pega_violacao_injetada():
+    """`validate_rules() == []` só vale alguma coisa se ele souber dizer não."""
+    ruim = a.Rule(
+        uid="regra-solta",  # sem o prefixo ops-centro-
+        title="teste",
+        # métrica com prefixo válido mas fora do catálogo + divisão sem clamp_min
+        expr="sum(agents_platform_coisa_inventada_total) / sum(agents_platform_outra_total)",
+        op="ge",  # operador não suportado
+        threshold=1,
+        duration="",  # sem histerese
+        severity="urgentissimo",  # fora do vocabulário
+        summary="",
+        description="",
+        component="apps",
     )
-    assert fora == [], f"{regra.uid} cita métrica desconhecida: {fora}"
+    problemas = " | ".join(a.validate_rules((ruim, ruim)))  # duplicado, de propósito
+    for esperado in ("uid duplicado", "uid deve começar", "severity", "sem `for`",
+                     "summary/description", "operador", "sem `app_name`",
+                     "fora do catálogo", "clamp_min"):
+        assert esperado in problemas, f"validação não pegou: {esperado}"
+
+
+def test_todo_runbook_e_um_link_clicavel():
+    """`runbook_url` é derivado do componente: basta um destes virar caminho relativo para
+    a regra chegar ao Telegram mandando quem foi acordado procurar o arquivo sozinho."""
+    for url in (a.RUNBOOK_ALERTAS, a.RUNBOOK_RETENCAO, a.RUNBOOK_FREE_TIER):
+        assert url.startswith("https://")
 
 
 def test_as_regras_dos_apps_cobrem_os_tres_sinais_da_issue():

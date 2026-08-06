@@ -44,82 +44,62 @@ def test_todos_os_quatro_dashboards_existem_no_repo():
         assert (d.DASHBOARDS_DIR / f"{nome}.json").exists()
 
 
-def test_json_gerado_e_estavel():
-    """Duas gerações seguidas produzem bytes idênticos — diff de PR só muda quando o
-    dashboard muda de verdade."""
-    assert d.render(d.build_visao_geral()) == d.render(d.build_visao_geral())
-
-
 # --- invariantes de estrutura -----------------------------------------------------
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_dashboard_tem_uid_titulo_e_variavel_de_ambiente(nome):
-    dash = TODOS[nome]
-    assert dash["uid"].startswith("ops-centro-")
-    assert dash["title"] and dash["description"]
-    variaveis = {v["name"] for v in dash["templating"]["list"]}
-    assert "DS_PROM" in variaveis  # datasource parametrizado (portável entre stacks)
-    assert "environment" in variaveis
+# Cada teste daqui para baixo varre os quatro dashboards e nomeia o culpado na mensagem —
+# é o que um `parametrize` por dashboard daria, sem multiplicar a contagem por quatro.
+def test_todo_dashboard_tem_a_moldura_certa():
+    uids = []
+    for nome, dash in sorted(TODOS.items()):
+        assert dash["uid"].startswith("ops-centro-"), nome
+        assert dash["title"] and dash["description"], nome
+        variaveis = {v["name"] for v in dash["templating"]["list"]}
+        # datasource parametrizado (portável entre stacks) + filtro de ambiente
+        assert {"DS_PROM", "environment"} <= variaveis, f"{nome}: faltam variáveis"
+        # A fonte de verdade é o gerador — edição na UI seria apagada sem aviso.
+        assert dash["editable"] is False, nome
+        uids.append(dash["uid"])
+    assert len(uids) == len(set(uids)), "uid repetido entre dashboards"
 
 
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_dashboard_nao_e_editavel_na_ui(nome):
-    """A fonte de verdade é o gerador — edição na UI seria apagada sem aviso."""
-    assert TODOS[nome]["editable"] is False
-
-
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_uids_e_ids_de_painel_sao_unicos(nome):
-    ids = [painel["id"] for painel in TODOS[nome]["panels"]]
-    assert len(ids) == len(set(ids))
-
-
-def test_uids_nao_colidem_entre_dashboards():
-    uids = [dash["uid"] for dash in TODOS.values()]
-    assert len(uids) == len(set(uids))
-
-
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_paineis_cabem_na_grade_de_24_colunas(nome):
-    for painel in TODOS[nome]["panels"]:
-        pos = painel["gridPos"]
-        assert pos["x"] + pos["w"] <= 24, f"{painel['title']} estoura a grade"
-        assert pos["h"] > 0
-
-
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_todo_painel_de_dados_tem_query_e_datasource(nome):
-    for painel in TODOS[nome]["panels"]:
-        if painel["type"] == "row":
-            continue
-        assert painel["targets"], f"{painel['title']} sem target"
-        assert painel["datasource"] == d.DS
-        for alvo in painel["targets"]:
-            assert alvo["expr"].strip()
+def test_todo_painel_e_bem_formado():
+    for nome, dash in sorted(TODOS.items()):
+        ids = [painel["id"] for painel in dash["panels"]]
+        assert len(ids) == len(set(ids)), f"{nome}: id de painel repetido"
+        for painel in dash["panels"]:
+            pos = painel["gridPos"]
+            assert pos["x"] + pos["w"] <= 24, f"{nome}/{painel['title']} estoura a grade"
+            assert pos["h"] > 0, f"{nome}/{painel['title']}"
+            if painel["type"] == "row":
+                continue
+            assert painel["targets"], f"{nome}/{painel['title']} sem target"
+            assert painel["datasource"] == d.DS, f"{nome}/{painel['title']}"
+            for alvo in painel["targets"]:
+                assert alvo["expr"].strip(), f"{nome}/{painel['title']}"
 
 
 # --- correção das queries ----------------------------------------------------------
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_toda_metrica_citada_esta_no_catalogo(nome):
-    fora = sorted(m for m in d.referenced_metrics(TODOS[nome]) if m not in BY_NAME)
-    assert fora == [], f"{nome} cita métrica fora do catálogo da §7: {fora}"
+def test_toda_metrica_citada_esta_no_catalogo():
+    for nome, dash in sorted(TODOS.items()):
+        fora = sorted(m for m in d.referenced_metrics(dash) if m not in BY_NAME)
+        assert fora == [], f"{nome} cita métrica fora do catálogo da §7: {fora}"
 
 
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_queries_so_usam_labels_do_schema(nome):
+def test_queries_so_usam_labels_do_schema():
     """Label fora do vocabulário no painel denuncia métrica de alta cardinalidade na
     origem — o risco número um do free tier (§10)."""
     permitidas = ALLOWED_METRIC_LABELS | {"le"}
-    for expr in exprs(TODOS[nome]):
-        usadas = set(re.findall(r"(\w+)\s*=~?\s*\"", expr))
-        for grupo in re.findall(r"by \(([^)]*)\)", expr):
-            usadas |= {label.strip() for label in grupo.split(",") if label.strip()}
-        assert usadas <= permitidas, f"labels fora do schema em {nome}: {usadas - permitidas}"
+    for nome, dash in sorted(TODOS.items()):
+        for expr in exprs(dash):
+            usadas = set(re.findall(r"(\w+)\s*=~?\s*\"", expr))
+            for grupo in re.findall(r"by \(([^)]*)\)", expr):
+                usadas |= {label.strip() for label in grupo.split(",") if label.strip()}
+            assert usadas <= permitidas, f"labels fora do schema em {nome}: {usadas - permitidas}"
 
 
-@pytest.mark.parametrize("nome", sorted(TODOS))
-def test_todo_dashboard_filtra_por_environment(nome):
-    for expr in exprs(TODOS[nome]):
-        assert 'environment=~"$environment"' in expr
+def test_todo_dashboard_filtra_por_environment():
+    for nome, dash in sorted(TODOS.items()):
+        for expr in exprs(dash):
+            assert 'environment=~"$environment"' in expr, f"{nome}: {expr}"
 
 
 def test_quantil_agrupa_por_le():

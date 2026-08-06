@@ -1017,6 +1017,11 @@ def validate_rules(rules: Iterable[Rule] | None = None) -> list[str]:
             problemas.append(f"{rule.uid}: sem `for` — alerta sem histerese vira ruído")
         if not (rule.summary and rule.description):
             problemas.append(f"{rule.uid}: summary/description obrigatórios (é o corpo do aviso)")
+        if not rule.runbook_url.startswith("https://"):
+            problemas.append(
+                f"{rule.uid}: runbook_url {rule.runbook_url!r} não é uma URL — quem for "
+                "acordado às 3h precisa de um link, não de um nome de arquivo"
+            )
         if rule.op not in ("gt", "lt"):
             problemas.append(f"{rule.uid}: operador {rule.op!r} não suportado (gt|lt)")
 

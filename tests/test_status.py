@@ -101,7 +101,11 @@ def conectar(banco):
         ("/status acme", s.CMD_STATUS, "acme"),
         ("/status@hermes_bot acme", s.CMD_STATUS, "acme"),  # o Telegram faz isso em grupo
         ("/erros hoje", s.CMD_ERROS, "hoje"),
-        ("/reiniciar tudo", s.CMD_AJUDA, "tudo"),
+        ("/acoes", s.CMD_ACOES, ""),
+        ("/ações", s.CMD_ACOES, ""),  # com acento é como se digita no celular
+        ("/reiniciar agents-platform", s.CMD_REINICIAR, "agents-platform"),
+        ("/despausar search", s.CMD_DESPAUSAR, "search"),
+        ("/desligar tudo", s.CMD_AJUDA, "tudo"),
         ("", s.CMD_AJUDA, ""),
     ],
 )
@@ -221,9 +225,34 @@ async def test_consulta_lenta_e_cancelada_no_deadline(conectar):
 
 
 async def test_comando_desconhecido_devolve_ajuda():
-    resposta = await s.run_command("/reiniciar tudo")
+    resposta = await s.run_command("/desligar tudo")
     assert resposta["command"] == s.CMD_AJUDA
     assert "/status" in resposta["text"]
+
+
+async def test_acoes_lista_o_audit_log(cloud, conectar, banco):
+    """`/acoes` (issue #19): o histórico de `action_audit` legível no celular."""
+    import libsql as _libsql
+
+    from ops_centro.turso import audit
+
+    conn = _libsql.connect(database=banco)
+    audit.record_action(
+        conn,
+        audit.ActionRecord(
+            action=audit.ACTION_PAUSE_TOOL, target="search", status=audit.STATUS_OK,
+            app_name="agents-platform", reason="7 falhas em 30min", ttl_seconds=900,
+        ),
+    )
+    conn.close()
+
+    resposta = await s.run_command("/acoes", cloud=cloud, connect_fn=conectar)
+    assert resposta["data"]["actions"]["total"] == 1
+    assert resposta["data"]["actions"]["actions"][0]["action"] == "pause_tool"
+    # `_` é reservado no MarkdownV2 e sai escapado — o teste lê o texto como o Telegram lê.
+    assert "pause\\_tool search" in resposta["text"] and "✅" in resposta["text"]
+    assert "7 falhas em 30min" in resposta["text"].replace("\\", "")
+    assert resposta["data"]["apps"] == []  # /acoes não consulta o Prometheus
 
 
 # --- endpoint ----------------------------------------------------------------------------

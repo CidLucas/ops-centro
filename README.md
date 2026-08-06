@@ -25,9 +25,11 @@ apps ──OTLP──▶ Grafana Cloud (Prom + Loki + Tempo, free tier)
 | Catálogo de métricas | [`ops_centro/metrics.py`](ops_centro/metrics.py) | As métricas prioritárias da §7 com tipo, unidade e labels fechadas — gera os painéis e é conferível contra o Prometheus ([docs](docs/metricas-prioritarias.md)) |
 | Receiver de alertas | [`ops_centro/receiver/`](ops_centro/receiver/) | FastAPI que recebe o webhook do Grafana e enriquece com o contexto do Turso — trace, logs correlacionados e links prontos ([docs](docs/alertas.md)) |
 | Canal do Hermes | [`ops_centro/receiver/hermes.py`](ops_centro/receiver/hermes.py) | Contrato receiver→Hermes: mensagem em MarkdownV2, retry com backoff, rate limit e dead-letter no Turso ([docs](docs/hermes.md)) |
-| Consultas sob demanda | [`ops_centro/receiver/status.py`](ops_centro/receiver/status.py) | `/status`, `/status <tenant>` e `/erros` respondidos com queries agregadas do Mimir + Turso (RF08, [docs](docs/hermes.md#2-consultas-sob-demanda-16)) |
+| Consultas sob demanda | [`ops_centro/receiver/status.py`](ops_centro/receiver/status.py) | `/status`, `/erros` e `/acoes` respondidos com queries agregadas do Mimir + Turso (RF08, [docs](docs/hermes.md#2-consultas-sob-demanda-16)) |
 | Ações autônomas | [`ops_centro/receiver/actions.py`](ops_centro/receiver/actions.py) | Pausa de tool com falha recorrente: evidência no Turso, TTL com despausa automática, kill switch e auditoria ([docs](docs/acoes-autonomas.md)) |
-| Migrations Turso | [`db/migrations/`](db/migrations/) | Tabela `logs` de longa retenção correlacionada por `trace_id` (RF05), dead-letter do Hermes e audit das ações |
+| Ações com confirmação | [`ops_centro/receiver/confirmations.py`](ops_centro/receiver/confirmations.py) | Restart e despausa propostos no Telegram com botões: allowlist de ação e de chat, token de uso único com 10 min de validade (RF10, [docs](docs/acoes-confirmadas.md)) |
+| Audit log das ações | [`ops_centro/turso/audit.py`](ops_centro/turso/audit.py) | Toda proposta, execução, recusa e falha em `action_audit`, com retenção longa e consultável por `/acoes` ([docs](docs/acoes-autonomas.md#6-auditoria-de-todas-as-ações-issue-19)) |
+| Migrations Turso | [`db/migrations/`](db/migrations/) | Tabela `logs` de longa retenção correlacionada por `trace_id` (RF05), dead-letter do Hermes, audit das ações e tokens de confirmação |
 | Writer de logs | [`ops_centro/turso/`](ops_centro/turso/) | `log_to_turso(...)` em batch numa thread daemon (RNF04) + aplicador de migrations — ver [docs/turso-logs.md](docs/turso-logs.md) |
 | Retenção dos logs | [`ops_centro/turso/retention.py`](ops_centro/turso/retention.py) | Janela por nível + job diário de limpeza, com métricas próprias e alerta de teto do free tier ([docs](docs/turso-retencao.md)) |
 | Dashboards as-code | [`ops_centro/grafana/`](ops_centro/grafana/) → [`grafana/dashboards/`](grafana/dashboards/) | Quatro dashboards gerados a partir do catálogo e publicados por API de forma idempotente ([docs](docs/dashboards.md)) |
@@ -77,6 +79,9 @@ Fase 4 — ações automatizadas:
 ```bash
 make actions-status   # kill switch, pausas vencidas e últimas ações (docs/acoes-autonomas.md)
 make actions-sweep    # despausa agora o que já venceu o TTL
+make acoes            # '/acoes' — histórico do audit log, como o Telegram vê
+make confirm-pending  # propostas aguardando confirmação (docs/acoes-confirmadas.md)
+make confirm-propose ACAO='restart_service agents-platform'   # propõe uma ação
 ```
 
 ## CI/CD
