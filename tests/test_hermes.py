@@ -223,6 +223,88 @@ async def test_dead_letter_sem_turso_nao_levanta(monkeypatch, caplog):
     assert "notificação perdida" in caplog.text
 
 
+# --- entrega direta à Bot API do Telegram (issue #15, correção) -------------------------
+async def test_entrega_telegram_direto_na_bot_api(monkeypatch):
+    """Com TELEGRAM_BOT_TOKEN, o POST vai à Bot API — sem HMAC no caminho."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "8607712655")
+    notificacao = h.notification_from_alerts([enriquecido()])
+    client, chamadas = transporte([200])
+    resultado = await h.deliver(notificacao, client=client)
+    assert resultado.status == h.DELIVERED and resultado.attempts == 1
+    assert str(chamadas[0].url) == "https://api.telegram.org/bot123:ABC/sendMessage"
+    corpo = json.loads(chamadas[0].content)
+    assert corpo["chat_id"] == "8607712655"
+    assert corpo["text"] == notificacao.text
+    assert corpo["parse_mode"] == "MarkdownV2"
+    assert "x-hub-signature-256" not in chamadas[0].headers
+    assert "authorization" not in chamadas[0].headers
+    assert "x-hermes-token" not in chamadas[0].headers
+
+
+async def test_telegram_usa_url_do_token_do_bot(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.delenv("HERMES_WEBHOOK_URL", raising=False)
+    client, chamadas = transporte([200])
+    resultado = await h.deliver(h.notification_from_alerts([enriquecido()]), client=client)
+    assert resultado.status == h.DELIVERED
+    assert str(chamadas[0].url) == "https://api.telegram.org/bot123:ABC/sendMessage"
+
+
+async def test_telegram_buttons_viram_inline_keyboard(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "8607712655")
+    notificacao = h.replace(
+        h.notification_from_alerts([enriquecido()]),
+        buttons=(({"text": "Confirmar", "callback_data": "ok"},),),
+    )
+    client, chamadas = transporte([200])
+    await h.deliver(notificacao, client=client)
+    corpo = json.loads(chamadas[0].content)
+    assert corpo["reply_markup"]["inline_keyboard"] == [[{"text": "Confirmar", "callback_data": "ok"}]]
+
+
+async def test_telegram_4xx_nao_e_retentado_e_vai_ao_dead_letter(monkeypatch, conectar):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    client, chamadas = transporte([401])
+    resultado = await h.deliver(h.notification_from_alerts([enriquecido()]), client=client,
+                                connect_fn=conectar, sleep=sem_espera)
+    assert len(chamadas) == 1
+    assert resultado.status == h.DEAD_LETTER and resultado.dead_lettered
+
+
+async def test_telegram_5xx_e_retentado(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    client, chamadas = transporte([503, 200])
+    resultado = await h.deliver(h.notification_from_alerts([enriquecido()]), client=client,
+                                sleep=sem_espera)
+    assert len(chamadas) == 2
+    assert resultado.status == h.DELIVERED and resultado.attempts == 2
+
+
+async def test_telegram_sem_token_cai_no_fallback_do_webhook(monkeypatch):
+    """Sem TELEGRAM_BOT_TOKEN, o comportamento atual (webhook + HMAC) é preservado."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("HERMES_WEBHOOK_URL", "https://hermes/notify")
+    monkeypatch.setenv("HERMES_WEBHOOK_TOKEN", "segredo")
+    notificacao = h.notification_from_alerts([enriquecido()])
+    corpo = json.dumps(notificacao.as_payload(), ensure_ascii=False).encode("utf-8")
+    client, chamadas = transporte([200])
+    resultado = await h.deliver(notificacao, client=client)
+    assert resultado.status == h.DELIVERED
+    assert str(chamadas[0].url) == "https://hermes/notify"
+    assert chamadas[0].content == corpo
+    assinatura = hmac.new(b"segredo", chamadas[0].content, hashlib.sha256).hexdigest()
+    assert chamadas[0].headers["x-hub-signature-256"] == f"sha256={assinatura}"
+
+
+async def test_sem_telegram_e_sem_webhook_vira_no_op(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("HERMES_WEBHOOK_URL", raising=False)
+    resultado = await h.deliver(h.notification_from_alerts([enriquecido()]))
+    assert resultado.status == h.DISABLED
+
+
 # --- rate limit -------------------------------------------------------------------------
 async def test_rate_limit_segura_a_tempestade_e_anuncia_o_que_segurou(monkeypatch):
     monkeypatch.setenv("HERMES_RATE_LIMIT", "2")

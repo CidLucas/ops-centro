@@ -1,8 +1,10 @@
-"""Envio da notificação enriquecida ao Hermes → Telegram (RF07 — parte 2, issue #15).
+"""Envio da notificação enriquecida ao Telegram (RF07 — parte 2, issue #15).
 
-Última perna do fluxo da Fase 3: Grafana → receiver (enriquecimento, #14) → **Hermes**
-→ Telegram. Este módulo é o lado do receiver: monta o envelope, entrega com retry e
-garante que uma queda do Hermes não apague o alerta.
+Última perna do fluxo da Fase 3: Grafana → receiver (enriquecimento, #14) → **Telegram**.
+Com `TELEGRAM_BOT_TOKEN` configurado, o receiver entrega **direto à Bot API** com o bot
+dedicado do ops-centro; sem token, cai no relay legado (`HERMES_WEBHOOK_URL`, webhook no
+gateway do Hermes). Este módulo monta o envelope, entrega com retry e garante que uma
+queda do canal não apague o alerta.
 
 **O contrato receiver→Hermes** (§1 de docs/hermes.md) é um JSON versionado com duas
 camadas de propósito:
@@ -316,6 +318,37 @@ def webhook_url() -> str:
     return os.environ.get("HERMES_WEBHOOK_URL", "").strip()
 
 
+def telegram_url() -> str:
+    """Endpoint da Bot API do bot dedicado do ops-centro. Vazio = sem bot configurado."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return ""
+    return f"https://api.telegram.org/bot{token}/sendMessage"
+
+
+def _telegram_body(notification: Notification) -> dict[str, Any]:
+    """Corpo do `sendMessage` da Bot API — `chat_id`, texto MarkdownV2 e teclado inline."""
+    corpo: dict[str, Any] = {
+        "chat_id": os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        "text": notification.text,
+        "parse_mode": "MarkdownV2",
+    }
+    if notification.buttons:
+        corpo["reply_markup"] = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": botao.get("text", ""),
+                        "callback_data": botao.get("callback_data", botao.get("id", "")),
+                    }
+                    for botao in linha
+                ]
+                for linha in notification.buttons
+            ]
+        }
+    return corpo
+
+
 def _auth_headers(corpo: bytes | None = None) -> dict[str, str]:
     """Token nos dois formatos + assinatura HMAC-SHA256 do corpo (X-Hub-Signature-256)."""
     token = os.environ.get("HERMES_WEBHOOK_TOKEN", "").strip()
@@ -466,15 +499,26 @@ async def deliver(
     connect_fn: Any = None,
     sleep=asyncio.sleep,
 ) -> DeliveryResult:
-    """Entrega a notificação ao Hermes, com retry e dead-letter. **Nunca levanta.**
+    """Entrega a notificação ao Telegram (direto ou via relay), com retry e dead-letter.
 
-    Sem `HERMES_WEBHOOK_URL` a função vira no-op declarado (`desativado`) — é o estado de
-    quem ainda não plugou o Hermes, e não pode custar um 500 no webhook do Grafana.
+    Ordem do destino: `url` explícita → caminho webhook legado (HMAC); senão
+    `TELEGRAM_BOT_TOKEN` → Bot API do Telegram (sem headers de auth); senão
+    `HERMES_WEBHOOK_URL` → relay do Hermes; senão vira no-op declarado (`desativado`).
+    **Nunca levanta** — sem canal configurado não pode custar um 500 no webhook do Grafana.
     """
-    destino = (url if url is not None else webhook_url()).strip()
+    destino = (url if url is not None else "").strip()
+    canal = "webhook"
     if not destino:
-        logger.info("HERMES_WEBHOOK_URL ausente — notificação não enviada")
-        return DeliveryResult(DISABLED, detail="HERMES_WEBHOOK_URL não configurado")
+        destino = telegram_url()
+        if destino:
+            canal = "telegram"
+    if not destino:
+        destino = webhook_url()
+    if not destino:
+        logger.info("TELEGRAM_BOT_TOKEN e HERMES_WEBHOOK_URL ausentes — notificação não enviada")
+        return DeliveryResult(
+            DISABLED, detail="TELEGRAM_BOT_TOKEN e HERMES_WEBHOOK_URL ausentes"
+        )
 
     passou, suprimidas = get_limiter().take()
     if not passou:
@@ -495,9 +539,9 @@ async def deliver(
     tentativas = retries if retries is not None else _int_env("HERMES_RETRIES", DEFAULT_RETRIES)
     espera = backoff if backoff is not None else _float_env("HERMES_BACKOFF", DEFAULT_BACKOFF_SECONDS)
     limite = timeout if timeout is not None else _float_env("HERMES_TIMEOUT", DEFAULT_TIMEOUT_SECONDS)
-    payload = notification.as_payload()
+    payload = _telegram_body(notification) if canal == "telegram" else notification.as_payload()
     corpo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = _auth_headers(corpo)
+    headers = {} if canal == "telegram" else _auth_headers(corpo)
 
     inicio = time.perf_counter()
     proprio = client is None
@@ -518,7 +562,7 @@ async def deliver(
                 if resposta.status_code < 300:
                     _record("ok", time.perf_counter() - inicio)
                     logger.info(
-                        "notificação entregue ao Hermes",
+                        "notificação entregue ao Telegram" if canal == "telegram" else "notificação entregue ao Hermes",
                         extra={"tentativas": tentativa, "group_key": notification.group_key},
                     )
                     return DeliveryResult(
@@ -602,15 +646,15 @@ def _exemplo() -> Notification:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    parser = argparse.ArgumentParser(description="Canal receiver→Hermes (issue #15)")
+    parser = argparse.ArgumentParser(description="Canal receiver→Telegram (issue #15)")
     parser.add_argument("--sample", action="store_true", help="imprime o envelope de exemplo")
-    parser.add_argument("--send", action="store_true", help="envia o exemplo ao HERMES_WEBHOOK_URL")
+    parser.add_argument("--send", action="store_true", help="envia o exemplo ao Telegram (ou ao relay)")
     args = parser.parse_args(argv)
 
     exemplo = _exemplo()
     if args.send:
-        if not webhook_url():
-            print("erro: HERMES_WEBHOOK_URL não configurado (ver .env.example)")
+        if not (telegram_url() or webhook_url()):
+            print("erro: TELEGRAM_BOT_TOKEN e HERMES_WEBHOOK_URL ausentes (ver .env.example)")
             return 2
         resultado = asyncio.run(deliver(exemplo))
         print(json.dumps(resultado.as_dict(), ensure_ascii=False, indent=2))

@@ -1,14 +1,15 @@
-# Canal Hermes: notificação e consulta sob demanda (issues #15 e #16)
+# Canal de notificação: Telegram (Bot API direta) e consulta sob demanda (issues #15 e #16)
 
 > Código: [`ops_centro/receiver/hermes.py`](../ops_centro/receiver/hermes.py) (envio) e
 > [`ops_centro/receiver/status.py`](../ops_centro/receiver/status.py) (consultas) ·
 > endpoints em [`ops_centro/receiver/app.py`](../ops_centro/receiver/app.py).
 
-Os dois sentidos do canal entre o receiver e o Hermes:
+Os dois sentidos do canal entre o receiver e o Telegram:
 
 ```
-Grafana ──webhook──▶ receiver ──enriquece (#14)──▶ POST HERMES_WEBHOOK_URL ──▶ Telegram
+Grafana ──webhook──▶ receiver ──enriquece (#14)──▶ POST api.telegram.org/bot<TOKEN>/sendMessage ──▶ Telegram
                         │                                    │
+                        │                    (fallback: HERMES_WEBHOOK_URL ─▶ relay do Hermes) │
                         │                          falhou 3x │
                         │                                    ▼
                         │                        hermes_dead_letter (Turso)
@@ -18,8 +19,22 @@ Grafana ──webhook──▶ receiver ──enriquece (#14)──▶ POST HERM
 
 ## 1. Contrato receiver→Hermes (#15)
 
-`POST` no `HERMES_WEBHOOK_URL`, JSON, autenticado com `HERMES_WEBHOOK_TOKEN` nos dois
-formatos (`X-Hermes-Token` e `Authorization: Bearer`) — o mesmo padrão do salto anterior.
+O **caminho primário** entrega direto à Bot API do Telegram com o bot dedicado do
+ops-centro: `POST https://api.telegram.org/bot<TOKEN>/sendMessage`, autenticado pela
+própria URL (o token vai no path) — sem headers de auth. O corpo é o `sendMessage`:
+
+```json
+{
+  "chat_id": "8607712655",
+  "text": "⚠️ *Tool search…*",            // MarkdownV2 pronto para o sendMessage
+  "parse_mode": "MarkdownV2"
+}
+```
+
+Sem `TELEGRAM_BOT_TOKEN`, o receiver cai no **fallback legado**: `POST` no
+`HERMES_WEBHOOK_URL`, JSON do envelope abaixo, autenticado com `HERMES_WEBHOOK_TOKEN`
+nos dois formatos (`X-Hermes-Token` e `Authorization: Bearer`) + assinatura
+HMAC-SHA256 (`X-Hub-Signature-256`) — o mesmo padrão do salto anterior.
 
 ```json
 {
@@ -47,9 +62,8 @@ formatos (`X-Hermes-Token` e `Authorization: Bearer`) — o mesmo padrão do sal
 
 **Por que a mensagem já vem formatada.** O `text` é MarkdownV2 com emoji de severidade
 (🚨 crítico, ⚠️ warning, ✅ resolvido, 🤖 ação autônoma), logs em bloco de código e links
-clicáveis. A formatação mora aqui, e não no Hermes, porque é aqui que vivem o schema, o
-enriquecimento e os testes — o handler do Hermes fica sendo o que ele deve ser: um relay.
-Quem quiser reformatar tem `alerts[]` e os campos estruturados no mesmo envelope.
+clicáveis. A formatação mora aqui porque é aqui que vivem o schema, o enriquecimento e os
+testes. Quem quiser reformatar tem `alerts[]` e os campos estruturados no mesmo envelope.
 
 **Por que MarkdownV2 e não HTML:** é o formato que o Telegram documenta como atual. O
 preço é o escape agressivo (`escape_md`) — escapar de menos é `400 Bad Request` no
@@ -86,9 +100,11 @@ Métricas do próprio envio (catálogo em [`metrics.py`](../ops_centro/metrics.p
 `ops_centro_hermes_delivery_duration_seconds` — uma subida de `status="error"` é o aviso
 de que o Telegram parou de receber.
 
-### O que fica do lado do Hermes
+### O que fica do lado do Hermes (só no fallback legado)
 
-Repo [hermes-dash](https://github.com/CidLucas), não este. O handler precisa de:
+No caminho primário a entrega é direta à Bot API, então o Hermes sai da cadeia de envio
+de alerta. Sem token de bot (`TELEGRAM_BOT_TOKEN` vazio), o receiver cai no relay do
+gateway e o handler dele precisa de:
 
 1. rota `POST` autenticada que aceite o envelope acima;
 2. `sendMessage` com `chat_id` do canal, `text` e `parse_mode` vindos do payload;
@@ -145,7 +161,7 @@ falhou (Grafana ou Turso) vira "sem dados"/"indisponível" e o resto chega.
 
 ```bash
 make hermes-sample    # envelope de exemplo + mensagem renderizada
-make hermes-send      # manda a notificação sintética ao HERMES_WEBHOOK_URL
+make hermes-send      # manda a notificação sintética ao Telegram (Bot API ou relay)
 make status           # responde '/status' localmente, como o Hermes veria
 make erros            # '/erros hoje'
 make acoes            # '/acoes' — histórico do audit log (#19)
@@ -162,14 +178,15 @@ no log em vez do banco — degradação prevista, mas é a prova que se quer ter
 
 Roteiro do critério de aceite ("alerta disparado no Grafana chega no Telegram em < 1 min"):
 
-1. **canal isolado** — `make hermes-send`. Manda um alerta sintético direto ao Hermes; se
-   a mensagem aparecer no Telegram, o salto receiver→Hermes→Telegram está de pé;
+1. **canal isolado** — `make hermes-send`. Manda um alerta sintético direto ao canal; se
+   a mensagem aparecer no Telegram pelo bot do ops-centro, o salto receiver→Telegram está
+   de pé;
 2. **fluxo completo** — no Grafana Cloud, *Alerting → nome da regra → Preview/Test* (ou
    baixe temporariamente o limiar de uma regra em `ops_centro/grafana/alerts.py` e rode
    `make alerts-apply`). O caminho exercitado é o de produção: regra → contact point →
-   `POST /alerts/grafana` → enriquecimento → Hermes → Telegram;
-3. **queda do Hermes** — derrube o Hermes e dispare de novo: o webhook continua
-   respondendo 202, e a linha aparece em `hermes_dead_letter`:
+   `POST /alerts/grafana` → enriquecimento → Bot API do Telegram;
+3. **queda do canal** — derrube o bot (token inválido) ou o relay e dispare de novo: o
+   webhook continua respondendo 202, e a linha aparece em `hermes_dead_letter`:
 
    ```sql
    SELECT created_at, reason, attempts FROM hermes_dead_letter ORDER BY created_at DESC LIMIT 5;
@@ -179,16 +196,35 @@ Roteiro do critério de aceite ("alerta disparado no Grafana chega no Telegram e
    `curl -H "X-Alert-Token: $ALERT_WEBHOOK_TOKEN" -d '{"command":"/status"}' \
    https://<domínio>/hermes/consulta`).
 
-> **Estado (2026-08-06):** relay real no ar e validado de ponta a ponta — POST sintético
-> no formato do Grafana Cloud → receiver (enriquecimento) → `POST HERMES_WEBHOOK_URL`
-> assinado com HMAC-SHA256 → rota `ops-centro-alerts` do gateway (direct delivery) →
-> Telegram. `delivery.status=entregue`, `attempts=1`, `HTTP 200`; mensagem confirmada
-> no gateway (`direct-deliver ... target=telegram`) e no chat.
+> **Estado (2026-08-06):** entrega direta à Bot API no ar e validada ao vivo — POST
+> `sendMessage` com `chat_id`, `text` MarkdownV2 e `parse_mode=MarkdownV2` entregou no
+> bot dedicado do ops-centro (`@KnowledgeBaseCurator_bot`). `delivery.status=entregue`,
+> `attempts=1`, `HTTP 200`; o webhook do Hermes virou fallback quando não há token de bot.
 
-## 6. Relay no Hermes (gateway webhook, porta 8644)
+## 6. Entrega ao Telegram: Bot API direta (primário) e relay no Hermes (fallback)
 
-O lado do Hermes é um **relay determinístico** (zero LLM): o gateway expõe uma rota de
-webhook que renderiza o template e entrega direto ao Telegram.
+**Caminho primário — Bot API direta.** Com `TELEGRAM_BOT_TOKEN` no `.env` do deploy, o
+receiver entrega sem depender do gateway:
+
+| Peça | Valor |
+| --- | --- |
+| Endpoint | `https://api.telegram.org/bot<TOKEN>/sendMessage` |
+| Chat de destino | `TELEGRAM_CHAT_ID` (`chat_id` no corpo) |
+| Corpo | `{"chat_id", "text" (MarkdownV2), "parse_mode": "MarkdownV2"}` |
+| Botões (#18) | `reply_markup.inline_keyboard`, montado a partir de `buttons` |
+| Auth | o token vai no path da URL — nenhum header de auth |
+| Resposta | `delivery.status` vem do HTTP da própria Bot API (2xx = entregue) |
+
+Retry com backoff, rate limit e dead-letter no Turso são os mesmos dos dois caminhos:
+5xx/429 voltam, 4xx (token/chave errados) vão direto ao dead-letter, e o envelope só some
+do rastro se o Turso também estiver fora. Saia o gateway do caminho, saiu um ponto de
+falha da cadeia.
+
+**Fallback opcional — relay no Hermes (gateway webhook, porta 8644).** Sem
+`TELEGRAM_BOT_TOKEN`, o receiver volta ao comportamento legado: POST assinado com
+HMAC-SHA256 no `HERMES_WEBHOOK_URL`. O lado do Hermes é um **relay determinístico** (zero
+LLM): o gateway expõe uma rota de webhook que renderiza o template e entrega direto ao
+Telegram (com o bot do perfil default do Hermes).
 
 ```bash
 hermes webhook subscribe ops-centro-alerts \
@@ -205,9 +241,10 @@ hermes webhook subscribe ops-centro-alerts \
 | Secret | o valor de `HERMES_WEBHOOK_TOKEN` no `.env` (é o secret da assinatura) |
 
 O `text` do envelope já vem em MarkdownV2 (escape feito no receiver); o relay repassa
-literal. Sem `--deliver-only`, o gateway montaria uma run de agente (custo e latência)
-— desnecessário quando a formatação já mora no receiver.
+literal. A rota `ops-centro-alerts` continua no ar, mas deixa de ser usada quando o token
+de bot está configurado.
 
-**Observabilidade:** cada entrega aparece no gateway como `[webhook] direct-deliver ...
-target=telegram msg_len=<n> delivery=<id>`; falhas do receiver caem em
-`hermes_dead_letter` (ver §5).
+**Observabilidade:** no caminho direto, `delivery.status` reflete a resposta da Bot API
+(`entregue`/`dead-letter` + `ops_centro_hermes_notifications_total`). No fallback, cada
+entrega aparece no gateway como `[webhook] direct-deliver ... target=telegram
+msg_len=<n> delivery=<id>`; falhas do receiver caem em `hermes_dead_letter`.
