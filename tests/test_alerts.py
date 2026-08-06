@@ -132,14 +132,20 @@ def test_regra_de_retencao_parada_alerta_na_ausencia_de_dado():
     assert regra.op == "lt"
 
 
-def test_grupo_host_tem_quatro_regras_com_job_de_host():
-    """As regras de host leem a integração Unix (`job="integrations/unix"`, issue #26)."""
+def test_grupo_host_tem_cinco_regras_com_job_de_host():
+    """As regras de host leem a integração Unix (`job="integrations/unix"`, issue #26); a
+    do dead-man's switch (issue #27) vigia o heartbeat do próprio receiver e não passa pela
+    integração Unix."""
     grupo = a.build_host()
     assert grupo.file == "host.yaml"
     assert grupo.name == "ops-centro-host"
-    assert len(grupo.rules) == 4
-    for regra in grupo.rules:
+    assert len(grupo.rules) == 5
+    com_job = [r for r in grupo.rules if r.uid != "ops-centro-host-deadman"]
+    assert len(com_job) == 4
+    for regra in com_job:
         assert 'job="integrations/unix"' in regra.expr
+    deadman = next(r for r in grupo.rules if r.uid == "ops-centro-host-deadman")
+    assert "ops_centro_heartbeat_total" in deadman.expr
 
 
 def test_restart_loop_usa_changes_no_estado_failed():
@@ -157,6 +163,32 @@ def test_coletor_parado_alerta_na_ausencia_de_sinal():
     regra = next(r for r in REGRAS if r.uid == "ops-centro-host-coletor-parado")
     assert regra.no_data == "Alerting"
     assert regra.op == "lt"
+
+
+def test_deadman_alerta_na_ausencia_de_sinal():
+    """Dead-man's switch do #27: a série do heartbeat some (NoData) ou congela
+    (increase=0) — os dois são o sintoma. O `or vector(0)` é o que faz o modo 'congelou'
+    alertar: `sum(increase(...))` sozinho devolveria NoData nos dois casos."""
+    regra = next(r for r in REGRAS if r.uid == "ops-centro-host-deadman")
+    assert regra.no_data == "Alerting"
+    assert regra.component == "ec2-host"
+    assert regra.duration == "10m"
+    assert regra.op == "lt"
+    assert regra.severity == a.SEVERITY_CRITICAL
+    assert "sum(increase(ops_centro_heartbeat_total[10m]))" in regra.expr
+    assert "or vector(0)" in regra.expr
+
+
+def test_rota_do_25_entrega_o_deadman_fora_da_ec2():
+    """A regra reusa a rota do #25: qualquer alerta com `component=ec2-host` (o do deadman
+    entre eles) vai ao Telegram nativo do Grafana Cloud — que não depende da EC2 que parou
+    de falar. Não alteramos o roteamento aqui: só conferimos que a regra cai nele."""
+    policy = a.build_policy()
+    infra = policy["routes"][0]
+    assert infra["receiver"] == a.TELEGRAM_NAME
+    assert ["component", "=", "ec2-host"] in infra["object_matchers"]
+    deadman = next(r for r in REGRAS if r.uid == "ops-centro-host-deadman")
+    assert deadman.component == "ec2-host"
 
 
 def test_estrutura_do_provisionamento():

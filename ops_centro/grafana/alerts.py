@@ -659,20 +659,21 @@ def build_host() -> RuleGroup:
 
     O `hermes-dashboard.service` ficou ~6 semanas (desde 23/jun) em loop de restart (800–
     1300/h) sem nenhum alerta, até exaurir memória e swap e a máquina ficar inacessível —
-    só um humano descobriu. Estas regras pegam a causa (loop de restart) e os dois caminhos
-    até ela (memória e disco), mais o próprio coletor (mini dead-man's switch; o #27
-    completo — NoData + keep_firing + rota independente — é outra issue).
+    só um humano descobriu. Estas regras pegam a causa (loop de restart), os dois caminhos
+    até ela (memória e disco), o próprio coletor (mini dead-man's switch) e o receiver
+    (dead-man's switch do #27: heartbeat + NoData, roteado fora da EC2).
     """
     return RuleGroup(
         file="host.yaml",
         name="ops-centro-host",
         interval_seconds=60,
-        header="""Alertas de host da EC2 — issue #28 (a causa do incidente de 05/08/2026).
+        header="""Alertas de host da EC2 — issues #28 e #27 (a causa do incidente de 05/08/2026).
 
 O `hermes-dashboard.service` ficou ~6 semanas (desde 23/jun) em loop de restart de 800–
 1300/h sem alerta, até exaurir memória e swap e a máquina ficar inacessível — só um humano
-descobriu. Estas regras vigiam a causa (restart loop) e os dois caminhos até ela (memória
-e disco), além do próprio coletor (mini dead-man's switch).
+descobriu. Estas regras vigiam a causa (restart loop), os dois caminhos até ela (memória
+e disco), o coletor de métricas (mini dead-man's switch) e o receiver (dead-man's switch
+do #27: heartbeat + NoData, roteado fora da EC2).
 
 Métricas: `job="integrations/unix"` — a integração Unix do Grafana Cloud via Alloy (issue
 #26). O node_exporter embutido no Alloy v1.18 não expõe `node_systemd_unit_restarts_total`,
@@ -766,6 +767,28 @@ robusto mesmo com scrape de 30s.""",
                     "falhou — é o alerta que o incidente de 05/08/2026 não tinha.\n"
                     "NoData vira alerta de propósito: aqui a ausência de sinal É o sintoma. "
                     "Confira o estado do Alloy e se as métricas voltaram ao Mimir."
+                ),
+            ),
+            Rule(
+                uid="ops-centro-host-deadman",
+                title="Host: heartbeat do receiver ausente há 10m (dead-man's switch)",
+                expr="sum(increase(ops_centro_heartbeat_total[10m])) or vector(0)",
+                op="lt",
+                threshold=1,
+                duration="10m",
+                severity=SEVERITY_CRITICAL,
+                component="ec2-host",  # rota do #25: Telegram nativo, NÃO depende da EC2
+                labels={ATTR_APP_NAME: "ops-centro"},
+                lookback=3600,
+                no_data="Alerting",  # ausência de sinal É o sintoma (padrão do #27)
+                summary="O receiver do ops-centro não emite heartbeat há 10m",
+                description=(
+                    "Nenhum incremento de ops_centro_heartbeat_total nos últimos 10m — a EC2 "
+                    "emudeceu (como em 05/08/2026), o container do receiver morreu, ou o OTLP "
+                    "quebrou. O alerta sai pela rota do #25 (Telegram nativo do Grafana Cloud), "
+                    "que não depende da máquina que parou de falar.\n"
+                    "Ações: (1) conferir se a EC2 responde (ssh/tailscale); (2) "
+                    "`docker ps` no receiver; (3) `docker logs ops-centro-receiver` e o healthz."
                 ),
             ),
         ),
